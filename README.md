@@ -1,22 +1,27 @@
+[![CI](https://github.com/QQxiaoming/iccom-utils/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/QQxiaoming/iccom-utils/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/qqxiaoming/iccom-utils.svg?colorB=f48041&style=flat-square)](https://github.com/QQxiaoming/iccom-utils)
+
 # iccom-utils
+
+English | [简体中文](./README_zh_CN.md)
 
 ## 介绍
 
-本项目是用于在使用[linux-symspi](https://github.com/Bosch-SW/linux-symspi),[linux-iccom](https://github.com/Bosch-SW/linux-iccom),[libiccom](https://github.com/Bosch-SW/libiccom)项目搭建spi对称全双工socket通信协议栈上编写的实用工具，包括：
+This project is a practical tool for writing on the spi symmetrical full-duplex socket communication protocol stack using [linux-symspi](https://github.com/Bosch-SW/linux-symspi),[linux-iccom](https://github.com/Bosch-SW/linux-iccom) and [libiccom](https://github.com/Bosch-SW/libiccom) projects, including:
 
 - iccsh/iccshd
 - iccom_send
 - iccom_recv
 
-> 1.本项目仓库内driver路径下源文件是在原项目linux-symspi/linux-iccom基础上进行了一定的bugfix和优化改进，代码尊重源License，但仍可以使用原项目的版本配合iccom-util实用工具使用. <br>2.本项目仓库内lib路径下源文件是在原项目libiccom基础上进行了一定的bugfix和优化改进，代码尊重源License，但仍可以使用原项目的版本配合iccom-util实用工具使用.
+> 1.The source files under the driver path in the project warehouse have some bugfixes and optimization improvements based on the original project linux-symspi/linux-iccom. The code respects the source license, but the version of the original project can still be used to cooperate with iccom-util. tool use.<br>2.The source files under the lib path in the project warehouse have some bugfixes and optimization improvements based on the original project libiccom. The code respects the source license, but the version of the original project can still be used with the iccom-util utility tool.
 
 ### iccsh/iccshd
 
-iccsh是基于iccom传输协议的终端转发工具，host主机运行iccshd，客户端主机运行iccsh即可通过基于spi的物理层进行终端操作。（设计思路类似ssh/sshd模式，但目前实现的iccsh不包含加密）
+iccsh is a terminal forwarding tool based on the iccom transport protocol. The host host runs iccshd, and the client host runs iccsh to perform terminal operations through the spi-based physical layer. (The design idea is similar to the ssh/sshd mode, but the currently implemented iccsh does not include encryption).
 
 ### iccom_send
 
-iccom_send是一个iccom传输协议下数据发送的实用工具（设计思路类似can-utils系列），使用方式如下：
+iccom_send is a practical tool for sending data under the iccom transmission protocol (the design idea is similar to the can-utils series), and the usage is as follows:
 
 ```shell
 iccom_send - send iccom-frames via sockets.
@@ -33,7 +38,7 @@ Examples:
 
 ### iccom_recv
 
-iccom_recv是一个iccom传输协议下数据接收的实用工具（设计思路类似can-utils系列），使用方式如下：
+iccom_recv is a practical tool for data reception under the iccom transmission protocol (the design idea is similar to the can-utils series), and the usage is as follows:
 
 ```shell
 iccom_recv - recv iccom-frames via sockets.
