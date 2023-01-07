@@ -8,17 +8,17 @@ CPPFLAGS += -s
 
 all: iccom_recv iccom_send iccsh iccshd
 
-iccom_recv: ./lib/iccom.c iccom_recv.c
-	$(CPP) $(CPPFLAGS) ./lib/iccom.c iccom_recv.cpp -I./ -o iccom_recv
+iccom_recv: ./lib/iccom.c iccom_recv.cpp
+	$(CPP) $(CPPFLAGS) ./lib/iccom.c iccom_recv.cpp -I./ -I./lib/ -o iccom_recv
 
-iccom_send: ./lib/iccom.c iccom_send.c
-	$(CPP) $(CPPFLAGS) ./lib/iccom.c iccom_send.cpp -I./ -o iccom_send
+iccom_send: ./lib/iccom.c iccom_send.cpp
+	$(CPP) $(CPPFLAGS) ./lib/iccom.c iccom_send.cpp -I./ -I./lib/  -o iccom_send
 
 iccsh: ./lib/iccom.c iccsh.cpp
-	$(CPP) $(CPPFLAGS) -DBUILD_TARGET=0 ./lib/iccom.c iccsh.cpp -I./ -lpthread -lutil -o iccsh
+	$(CPP) $(CPPFLAGS) -DBUILD_TARGET=0 ./lib/iccom.c iccsh.cpp -I./ -I./lib/  -lpthread -lutil -o iccsh
 
 iccshd: ./lib/iccom.c iccsh.cpp
-	$(CPP) $(CPPFLAGS) -DBUILD_TARGET=1 ./lib/iccom.c iccsh.cpp -I./ -lpthread -lutil -o iccshd
+	$(CPP) $(CPPFLAGS) -DBUILD_TARGET=1 ./lib/iccom.c iccsh.cpp -I./ -I./lib/  -lpthread -lutil -o iccshd
 
 .PHONY: clean install
 clean:

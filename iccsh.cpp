@@ -30,7 +30,7 @@ void iccom2fd_loop(unsigned int iccom_port, int fd) {
             for(int i = 0;i < size;i++) {
                 buf[i] = sk[i];
             }
-            write(fd, buf, size);
+            size_t w = write(fd, buf, size);
 			fsync(fd);
         }
     }
@@ -60,18 +60,22 @@ void fd2iccom_loop(unsigned int iccom_port, int fd) {
 
 void *sin_handler(void *arg) {
     iccom2fd_loop(ICCOM_SKIN_PORT,*(int *)arg);
+    return NULL;
 }
 
 void *sout_handler(void *arg) {
     fd2iccom_loop(ICCOM_SKOUT_PORT,*(int *)arg);
+    return NULL;
 }
 
 void *min_handler(void *arg) {
     fd2iccom_loop(ICCOM_SKIN_PORT,*(int *)arg);
+    return NULL;
 }
 
 void *mout_handler(void *arg) {
     iccom2fd_loop(ICCOM_SKOUT_PORT,*(int *)arg);
+    return NULL;
 }
 
 static struct termios s_termbuf1;

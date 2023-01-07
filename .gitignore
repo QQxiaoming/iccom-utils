@@ -53,3 +53,9 @@ dkms.conf
 
 # Misc
 .DS_Store
+
+# Specific Executables
+iccom_recv
+iccom_send
+iccsh
+iccshd
