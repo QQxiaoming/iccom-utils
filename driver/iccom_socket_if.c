@@ -109,7 +109,7 @@
         pr_err(ICCOM_SOCKETS_LOG_PREFIX"%s: "fmt"\n", __func__           \
                , ##__VA_ARGS__)
 #define iccom_socket_warning(fmt, ...)                                   \
-        pr_warning(ICCOM_SOCKETS_LOG_PREFIX"%s: "fmt"\n", __func__       \
+        pr_warn(ICCOM_SOCKETS_LOG_PREFIX"%s: "fmt"\n", __func__          \
                , ##__VA_ARGS__)
 #define iccom_socket_info(fmt, ...)                                      \
         pr_info(ICCOM_SOCKETS_LOG_PREFIX"%s: "fmt"\n", __func__          \
@@ -125,7 +125,7 @@
 #define iccom_socket_err_raw(fmt, ...)                                   \
         pr_err(ICCOM_SOCKETS_LOG_PREFIX""fmt"\n", ##__VA_ARGS__)
 #define iccom_socket_warning_raw(fmt, ...)                               \
-        pr_warning(ICCOM_SOCKETS_LOG_PREFIX""fmt"\n", ##__VA_ARGS__)
+        pr_warn(ICCOM_SOCKETS_LOG_PREFIX""fmt"\n", ##__VA_ARGS__)
 #define iccom_socket_info_raw(fmt, ...)                                  \
         pr_info(ICCOM_SOCKETS_LOG_PREFIX""fmt"\n", ##__VA_ARGS__)
 #ifdef ICCOM_SOCKET_DEBUG
