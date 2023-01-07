@@ -483,7 +483,7 @@ static void __symspi_error_report_init(struct symspi_dev *symspi);
 static inline void __symspi_restart_timeout_timer(struct symspi_dev *symspi);
 static inline void __symspi_stop_timeout_timer(struct symspi_dev *symspi);
 static inline void __symspi_stop_timeout_timer_sync(struct symspi_dev *symspi);
-static void __symspi_other_side_wait_timeout(unsigned long data);
+static void __symspi_other_side_wait_timeout(struct timer_list *timer);
 static inline int __symspi_init_workqueue(
 		const struct symspi_dev *const symspi);
 static inline void __symspi_close_workqueue(
@@ -792,7 +792,7 @@ struct symspi_dev_private {
 
 	struct proc_dir_entry *proc_root;
 	struct proc_dir_entry *info_file;
-	struct file_operations info_ops;
+	struct proc_ops info_ops;
 
 	struct symspi_info info;
 };
@@ -1025,8 +1025,8 @@ int symspi_init(void __kernel *device
 	__symspi_error_report_init(symspi);
 
 	// timeout timer
-	setup_timer(&symspi->p->wait_timeout_timer,
-		    __symspi_other_side_wait_timeout, (unsigned long)symspi->p);
+	timer_setup(&symspi->p->wait_timeout_timer,
+		    __symspi_other_side_wait_timeout, 0);
 
 	res = symspi_xfer_init_copy(&symspi->p->current_xfer, default_xfer);
 	if (res < 0) {
@@ -1729,9 +1729,9 @@ static inline void __symspi_stop_timeout_timer_sync(struct symspi_dev *symspi)
 
 
 // Launches error recovery on timeout
-static void __symspi_other_side_wait_timeout(unsigned long data)
+static void __symspi_other_side_wait_timeout(struct timer_list *timer)
 {
-	struct symspi_dev_private *priv = (struct symspi_dev_private *)data;
+	struct symspi_dev_private *priv = container_of(timer, struct symspi_dev_private, wait_timeout_timer);
 	struct symspi_dev *symspi = container_of(&priv, struct symspi_dev, p);
 
 	SYMSPI_CHECK_DEVICE_AND_PRIVATE("No device provided for recovery."
@@ -3185,8 +3185,7 @@ static inline int __symspi_info_init(struct symspi_dev *symspi)
 
 	// info access operations
 	memset(&symspi->p->info_ops, 0, sizeof(symspi->p->info_ops));
-	symspi->p->info_ops.read  = &__symspi_info_read;
-	symspi->p->info_ops.owner = THIS_MODULE;
+	symspi->p->info_ops.proc_read  = &__symspi_info_read;
 
 	if (IS_ERR_OR_NULL(symspi->p->proc_root)) {
 		symspi_err("failed to create info proc entry:"
@@ -3239,7 +3238,7 @@ static ssize_t __symspi_info_read(struct file *file
 	SYMSPI_CHECK_PTR(ubuf, return -EINVAL);
 	SYMSPI_CHECK_PTR(ppos, return -EINVAL);
 
-	struct symspi_dev *symspi = (struct symspi_dev *)PDE_DATA(file->f_inode);
+	struct symspi_dev *symspi = (struct symspi_dev *)pde_data(file->f_inode);
 
 	SYMSPI_CHECK_DEVICE_AND_PRIVATE("", return -ENODEV);
 
@@ -3722,7 +3721,7 @@ failure:
 	return fail_res;
 }
 
-static int symspi_remove(struct spi_device *spi)
+static void symspi_remove(struct spi_device *spi)
 {
 	symspi_info(SYMSPI_LOG_INFO_KEY_LEVEL
 		    , "module unloading: global dev ptr: %px"
@@ -3736,8 +3735,6 @@ static int symspi_remove(struct spi_device *spi)
 	symspi_global_device_ptr = NULL;
 
 	symspi_info(SYMSPI_LOG_INFO_KEY_LEVEL, "module unloaded");
-
-	return SYMSPI_SUCCESS;
 }
 
 enum symspi_id {
