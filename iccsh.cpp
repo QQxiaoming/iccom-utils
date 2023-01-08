@@ -7,15 +7,27 @@
 #include <unistd.h>
 #include <signal.h>
 #include <pthread.h>
-#include <iccom.h>
 
-#define ICCSH     0
-#define ICCSHD    1
+#include "iccom.h"
 
+/*! Build Opt Macro */
+#define BUILD_ICCSH     0
+#define BUILD_ICCSHD    1
+
+/*! Forward stdin port id */
 #define ICCOM_SKIN_PORT     4080
+/*! Forward stdout port id */
 #define ICCOM_SKOUT_PORT    4081
+/*! Forward sig port id */
 #define ICCOM_SKSIG_PORT    4082
 
+/**************************** common ****************************/
+/**
+ * @brief Forward data from iccom to fd
+ * 
+ * @param iccom_port Source iccom port num
+ * @param fd Destin fd
+ */
 void iccom2fd_loop(unsigned int iccom_port, int fd) {
     IccomSocket sk{iccom_port};
     fd_set rfds;
@@ -30,7 +42,7 @@ void iccom2fd_loop(unsigned int iccom_port, int fd) {
             for(int i = 0;i < size;i++) {
                 buf[i] = sk[i];
             }
-            size_t w = write(fd, buf, size);
+            size_t ws = write(fd, buf, size);
 			fsync(fd);
         }
     }
@@ -38,6 +50,12 @@ void iccom2fd_loop(unsigned int iccom_port, int fd) {
     sk.close();
 }
 
+/**
+ * @brief Forward data from fd to iccom
+ * 
+ * @param iccom_port Destin iccom port num
+ * @param fd Source fd
+ */
 void fd2iccom_loop(unsigned int iccom_port, int fd) {
     IccomSocket sk{iccom_port};
     fd_set rfds;
@@ -58,42 +76,55 @@ void fd2iccom_loop(unsigned int iccom_port, int fd) {
     sk.close();
 }
 
+/**
+ * @brief Server stdin forward handler
+ */
 void *sin_handler(void *arg) {
     iccom2fd_loop(ICCOM_SKIN_PORT,*(int *)arg);
     return NULL;
 }
 
+/**
+ * @brief Server stdout forward handler
+ */
 void *sout_handler(void *arg) {
     fd2iccom_loop(ICCOM_SKOUT_PORT,*(int *)arg);
     return NULL;
 }
 
-void *min_handler(void *arg) {
+/**
+ * @brief Client stdin forward handler
+ */
+void *cin_handler(void *arg) {
     fd2iccom_loop(ICCOM_SKIN_PORT,*(int *)arg);
     return NULL;
 }
 
-void *mout_handler(void *arg) {
+/**
+ * @brief Client stdout forward handler
+ */
+void *cout_handler(void *arg) {
     iccom2fd_loop(ICCOM_SKOUT_PORT,*(int *)arg);
     return NULL;
 }
 
-static struct termios s_termbuf1;
-static struct termios s_termbuf2;
-static pid_t parent_pid;
-static void clean_up_and_exit(int sig)
+/**************************** iccsh ****************************/
+static struct termios iccsh_stdin_termbuf_bak;
+static struct termios iccsh_stdout_termbuf_bak;
+static pid_t iccsh_main_pid;
+static void iccsh_clean_up_and_exit(int sig)
 {
     static int last_sig = 0;
 
     if((sig == SIGQUIT) || (last_sig == SIGTSTP)) {
         last_sig = 0;
-        tcsetattr(STDIN_FILENO, TCSANOW, &s_termbuf1);
-        tcsetattr(STDOUT_FILENO, TCSANOW, &s_termbuf2);
-        kill(parent_pid, SIGKILL);
+        tcsetattr(STDIN_FILENO, TCSANOW, &iccsh_stdin_termbuf_bak);
+        tcsetattr(STDOUT_FILENO, TCSANOW, &iccsh_stdout_termbuf_bak);
+        kill(iccsh_main_pid, SIGKILL);
         exit(0);
     } else if(last_sig == SIGINT) {
         last_sig = 0;
-        //send  sig
+        //forward sig to iccshd
         IccomSocket sk{ICCOM_SKSIG_PORT};
         sk.open();
         sk.set_read_timeout(0);
@@ -111,7 +142,7 @@ int iccsh_main(int argc, char **argv) {
     openpty(&m_stdin, &s_stdin, NULL, NULL, NULL);
     openpty(&m_stdout, &s_stdout, NULL, NULL, NULL);
     
-    parent_pid = getpid();
+    iccsh_main_pid = getpid();
     pid_t pid = fork();
     if(pid == 0) {
         close(STDERR_FILENO);
@@ -140,14 +171,14 @@ int iccsh_main(int argc, char **argv) {
         int t_stdin = STDIN_FILENO;
         int t_stdout = STDOUT_FILENO;
 
-        tcgetattr(STDIN_FILENO, &s_termbuf1);
-        tcgetattr(STDOUT_FILENO, &s_termbuf2);
-        signal(SIGINT, clean_up_and_exit);
-        signal(SIGTSTP, clean_up_and_exit);
-        signal(SIGQUIT, clean_up_and_exit);
+        tcgetattr(STDIN_FILENO, &iccsh_stdin_termbuf_bak);
+        tcgetattr(STDOUT_FILENO, &iccsh_stdout_termbuf_bak);
+        signal(SIGINT, iccsh_clean_up_and_exit);
+        signal(SIGTSTP, iccsh_clean_up_and_exit);
+        signal(SIGQUIT, iccsh_clean_up_and_exit);
 
-        pthread_create(&skin, NULL, min_handler, &t_stdin);
-        pthread_create(&skout, NULL, mout_handler, &t_stdout);
+        pthread_create(&skin, NULL, cin_handler, &t_stdin);
+        pthread_create(&skout, NULL, cout_handler, &t_stdout);
 
         pthread_join(skin, NULL);
         pthread_join(skout, NULL);
@@ -159,10 +190,11 @@ int iccsh_main(int argc, char **argv) {
     return 0;
 }
 
-static pid_t cpid;
-static void tran(int sig)
+/**************************** iccshd ****************************/
+static pid_t iccshd_sh_pid;
+static void iccshd_forward_sig(int sig)
 {
-    killpg(cpid,SIGKILL);
+    killpg(iccshd_sh_pid,SIGKILL);
 }
 
 int iccshd_main(int argc, char **argv) {
@@ -172,7 +204,6 @@ int iccshd_main(int argc, char **argv) {
     openpty(&m_stdin, &s_stdin, NULL, NULL, NULL);
     openpty(&m_stdout, &s_stdout, NULL, NULL, NULL);
     
-    parent_pid = getpid();
     pid_t pid = fork();
     if(pid == 0) {
     re_execvp:
@@ -209,9 +240,9 @@ int iccshd_main(int argc, char **argv) {
             execvp(argv[0], (char* const*)argv);
             exit(0);
         } else {
-            cpid = exepid;
-            signal(SIGINT, tran);
-            signal(SIGTSTP, tran);
+            iccshd_sh_pid = exepid;
+            signal(SIGINT, iccshd_forward_sig);
+            signal(SIGTSTP, iccshd_forward_sig);
             while(1) {
                 if (waitpid(exepid, NULL, WNOHANG) == exepid) {
                     goto re_execvp;
@@ -249,10 +280,14 @@ int iccshd_main(int argc, char **argv) {
     return 0;
 }
 
+/**************************** main ****************************/
+
 int main(int argc, char **argv) {
-#if (BUILD_TARGET == ICCSH)
+#if (BUILD_TARGET == BUILD_ICCSH)
     return iccsh_main(argc,argv);
-#elif (BUILD_TARGET == ICCSHD)
+#elif (BUILD_TARGET == BUILD_ICCSHD)
     return iccshd_main(argc,argv);
 #endif
 }
+
+/**************************** end ****************************/
