@@ -111,7 +111,6 @@ void *cout_handler(void *arg) {
 /**************************** iccsh ****************************/
 static struct termios iccsh_stdin_termbuf_bak;
 static struct termios iccsh_stdout_termbuf_bak;
-static pid_t iccsh_main_pid;
 static void iccsh_clean_up_and_exit(int sig)
 {
     static int last_sig = 0;
@@ -120,7 +119,7 @@ static void iccsh_clean_up_and_exit(int sig)
         last_sig = 0;
         tcsetattr(STDIN_FILENO, TCSANOW, &iccsh_stdin_termbuf_bak);
         tcsetattr(STDOUT_FILENO, TCSANOW, &iccsh_stdout_termbuf_bak);
-        kill(iccsh_main_pid, SIGKILL);
+        kill(getpid(), SIGKILL);
         exit(0);
     } else if(last_sig == SIGINT) {
         last_sig = 0;
@@ -142,7 +141,6 @@ int iccsh_main(int argc, char **argv) {
     openpty(&m_stdin, &s_stdin, NULL, NULL, NULL);
     openpty(&m_stdout, &s_stdout, NULL, NULL, NULL);
     
-    iccsh_main_pid = getpid();
     pid_t pid = fork();
     if(pid == 0) {
         close(STDERR_FILENO);
@@ -197,10 +195,16 @@ static void iccshd_forward_sig(int sig)
     killpg(iccshd_sh_pid,SIGKILL);
 }
 
+static void iccshd_clean_up_and_exit(int sig)
+{
+    killpg(getpid(),SIGKILL);
+}
+
 int iccshd_main(int argc, char **argv) {
     int m_stdin,m_stdout;
     int s_stdin,s_stdout;
 
+    setsid();
     openpty(&m_stdin, &s_stdin, NULL, NULL, NULL);
     openpty(&m_stdout, &s_stdout, NULL, NULL, NULL);
     
@@ -250,6 +254,9 @@ int iccshd_main(int argc, char **argv) {
             }
         }
     } else {
+        signal(SIGINT, iccshd_clean_up_and_exit);
+        signal(SIGTSTP, iccshd_clean_up_and_exit);
+
         pthread_t skin, skout;
 
         pthread_create(&skin, NULL, sin_handler, &m_stdin);
