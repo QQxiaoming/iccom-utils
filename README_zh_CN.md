@@ -9,15 +9,15 @@
 
 本项目是用于在使用[linux-symspi](https://github.com/Bosch-SW/linux-symspi),[linux-iccom](https://github.com/Bosch-SW/linux-iccom),[libiccom](https://github.com/Bosch-SW/libiccom)项目搭建spi对称全双工socket通信协议栈上编写的实用工具，包括：
 
-- iccsh/iccshd
+- iccshd/iccsh/icccp
 - iccom_send
 - iccom_recv
 
 > 1.本项目仓库内driver路径下源文件是在原项目linux-symspi/linux-iccom基础上进行了一定的bugfix和优化改进，代码尊重源License，但仍可以使用原项目的版本配合iccom-util实用工具使用. <br>2.本项目仓库内lib路径下源文件是在原项目libiccom基础上进行了一定的bugfix和优化改进，代码尊重源License，但仍可以使用原项目的版本配合iccom-util实用工具使用.
 
-### iccsh/iccshd
+### iccshd/iccsh/icccp
 
-iccsh是基于iccom传输协议的终端转发工具，host主机运行iccshd，客户端主机运行iccsh即可通过基于spi的物理层进行终端操作。（设计思路类似ssh/sshd模式，但目前实现的iccsh不包含加密）。
+iccsh是基于iccom传输协议的终端转发工具，host主机运行iccshd，客户端主机运行iccsh即可通过基于spi的物理层进行终端操作（设计思路类似sshd/ssh模式，但目前实现的iccsh不包含加密）。icccp用于文件拷贝（设计思路类似scp）。
 
 ### iccom_send
 

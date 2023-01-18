@@ -9,15 +9,15 @@ English | [简体中文](./README_zh_CN.md)
 
 This project is a practical tool for writing on the spi symmetrical full-duplex socket communication protocol stack using [linux-symspi](https://github.com/Bosch-SW/linux-symspi),[linux-iccom](https://github.com/Bosch-SW/linux-iccom) and [libiccom](https://github.com/Bosch-SW/libiccom) projects, including:
 
-- iccsh/iccshd
+- iccshd/iccsh/icccp
 - iccom_send
 - iccom_recv
 
 > 1.The source files under the driver path in the project warehouse have some bugfixes and optimization improvements based on the original project linux-symspi/linux-iccom. The code respects the source license, but the version of the original project can still be used to cooperate with iccom-util. tool use.<br>2.The source files under the lib path in the project warehouse have some bugfixes and optimization improvements based on the original project libiccom. The code respects the source license, but the version of the original project can still be used with the iccom-util utility tool.
 
-### iccsh/iccshd
+### iccshd/iccsh/icccp
 
-iccsh is a terminal forwarding tool based on the iccom transport protocol. The host host runs iccshd, and the client host runs iccsh to perform terminal operations through the spi-based physical layer. (The design idea is similar to the ssh/sshd mode, but the currently implemented iccsh does not include encryption).
+iccsh is a terminal forwarding tool based on the iccom transport protocol. The host host runs iccshd, and the client host runs iccsh to perform terminal operations through the spi-based physical layer (The design idea is similar to the sshd/ssh mode, but the currently implemented iccsh does not include encryption). icccp is used for file copying (the design idea is similar to scp).
 
 ### iccom_send
 
