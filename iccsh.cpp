@@ -85,14 +85,6 @@ void *sin_handler(void *arg) {
 }
 
 /**
- * @brief Server stdout forward handler
- */
-void *sout_handler(void *arg) {
-    fd2iccom_loop(ICCOM_SKOUT_PORT,*(int *)arg);
-    return NULL;
-}
-
-/**
  * @brief Client stdin forward handler
  */
 void *cin_handler(void *arg) {
@@ -101,10 +93,48 @@ void *cin_handler(void *arg) {
 }
 
 /**
+ * @brief Server stdout forward handler
+ */
+void *sout_handler(void *arg) {
+    fd2iccom_loop(ICCOM_SKOUT_PORT,*(int *)arg);
+    return NULL;
+}
+
+/**
  * @brief Client stdout forward handler
  */
 void *cout_handler(void *arg) {
     iccom2fd_loop(ICCOM_SKOUT_PORT,*(int *)arg);
+    return NULL;
+}
+
+void *ssig_handler(void *arg) {
+    pid_t pid = *(pid_t *)arg;
+    IccomSocket sk{ICCOM_SKSIG_PORT};
+    sk.open();
+    sk.set_read_timeout(0);
+    while(1) {
+        if (sk.receive() >= 0) {
+            int size = sk.input_size();
+            for(int i = 0;i < size;i++) {
+                int sig = sk[i];
+                if(sig != 0) {
+                    kill(pid,sig);
+                }
+            }
+        }
+    }
+    sk.close();
+    return NULL;
+}
+
+void *csig_handler(void *arg) {
+    int sig = *(int *)arg;
+    IccomSocket sk{ICCOM_SKSIG_PORT};
+    sk.open();
+    sk.set_read_timeout(0);
+    sk.send_direct((char*)&sig,sizeof(sig));
+    sk.close();
     return NULL;
 }
 
@@ -124,11 +154,7 @@ static void iccsh_clean_up_and_exit(int sig)
     } else if(last_sig == SIGINT) {
         last_sig = 0;
         //forward sig to iccshd
-        IccomSocket sk{ICCOM_SKSIG_PORT};
-        sk.open();
-        sk.set_read_timeout(0);
-        sk.send_direct((char*)&sig,sizeof(sig));
-        sk.close();
+        csig_handler(&sig);
     } else {
         last_sig = sig;
     }
@@ -257,29 +283,15 @@ int iccshd_main(int argc, char **argv) {
         signal(SIGINT, iccshd_clean_up_and_exit);
         signal(SIGTSTP, iccshd_clean_up_and_exit);
 
-        pthread_t skin, skout;
+        pthread_t skin, skout, sksig;
 
         pthread_create(&skin, NULL, sin_handler, &m_stdin);
         pthread_create(&skout, NULL, sout_handler, &m_stdout);
-
-        IccomSocket sk{ICCOM_SKSIG_PORT};
-        sk.open();
-        sk.set_read_timeout(0);
-        while(1) {
-            if (sk.receive() >= 0) {
-                int size = sk.input_size();
-                for(int i = 0;i < size;i++) {
-                    int sig = sk[i];
-                    if(sig != 0) {
-                        kill(pid,sig);
-                    }
-                }
-            }
-        }
-        sk.close();
+        pthread_create(&sksig, NULL, ssig_handler, &pid);
 
         pthread_join(skin, NULL);
         pthread_join(skout, NULL);
+        pthread_join(sksig, NULL);
     }
     
     close(m_stdin);close(s_stdin);
