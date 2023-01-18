@@ -48,3 +48,11 @@ Usage: iccom_recv <ch_id>.
 Examples:
     iccom_recv 15A1
 ```
+
+## 待办
+
+- [ ] iccsh 支持加密
+- [ ] iccshd 支持自定义端口号
+- [ ] iccshd 支持多终端连接
+- [ ] icccp 支持递归
+- [ ] icccp 改进目标路径是目录的方式

@@ -5,7 +5,7 @@
 
 English | [简体中文](./README_zh_CN.md)
 
-## 介绍
+## introduction
 
 This project is a practical tool for writing on the spi symmetrical full-duplex socket communication protocol stack using [linux-symspi](https://github.com/Bosch-SW/linux-symspi),[linux-iccom](https://github.com/Bosch-SW/linux-iccom) and [libiccom](https://github.com/Bosch-SW/libiccom) projects, including:
 
@@ -48,3 +48,11 @@ Usage: iccom_recv <ch_id>.
 Examples:
     iccom_recv 15A1
 ```
+
+## TODO
+
+- [ ] iccsh support encryption
+- [ ] iccshd support custom port num
+- [ ] iccshd support Multi-terminal connection
+- [ ] icccp support recursive
+- [ ] icccp improve the way the target path is a directory

@@ -803,121 +803,193 @@ int iccsh_main(int argc, char **argv) {
 }
 
 /**************************** icccp ****************************/
-int remote_sync_file_write(IccomCmdSever &dev,const char *srcfillname,const char *destfillname, bool force)
+void icccp_useage(void)
 {
-    int tfd = dev.SendVFSOpen(destfillname,O_RDONLY,0);
-    if(tfd > 0) {
-        dev.SendVFSClose(tfd);
-        if(!force){
-            printf("%s already exists!\n",destfillname);
-            return -1;
-        }
-        int size = strlen(destfillname) + 4;
-        char *cmd = (char *)malloc(size);
-        if(cmd){
-            sprintf(cmd,"rm %s",destfillname);
-            dev.SendSYSSystem((const char *)cmd);
-            free(cmd);
-        } else {
-            printf("malloc fail!\n");
-            return -1;
-        }
-    } 
-    
-    uint8_t data[2048];
-    FILE * fp = NULL;
-    int file_size = 0;
-    fp = fopen(srcfillname, "rb");
-    if (!fp) {
-        printf("fopen fail!\n");
-        return -1;
-    }
-    fseek(fp, 0, SEEK_END);
-    file_size = ftell(fp);
-    fseek(fp, 0, SEEK_SET);
-
-    int fd = dev.SendVFSOpen(destfillname, O_WRONLY | O_NONBLOCK | O_CREAT, 0);
-	if(fd){
-        for(uint32_t send_size = 0; send_size < file_size;) {
-            uint32_t size = fread(data, 1, 2048, fp);
-            if(size) {
-                fflush(stdout);
-                int _ret =dev.SendVFSWrite(fd,data,size,send_size);
-                if(_ret != size) {
-                    dev.SendVFSClose(fd);
-                    fclose(fp);
-                    printf("\nSendVFSWrite fail %d!\n",_ret);
-                    return -1;
-                }
-                send_size += size;
-            } else {
-                break;
-            }
-        }
-    }
-    dev.SendVFSClose(fd);
-    fclose(fp);
-    dev.SendSYSSystem("sync");
-    return 0;
+    printf("USEAGE:\t icccp SRC([Address]:[Path]) DEST([Address]:[Path]) [-f] [-r]\n");
+    printf("\t remote must use full path!\n");
+    printf("e.g.:\t icccp local:srcfile remote:/<full path>/destfile\n");
+    printf("\t icccp remote:/<full path>/srcfile local:destfile\n");
+    printf("\t icccp local:srcdir remote:/<full path>/destdir -r\n");
+    printf("\t icccp remote:/<full path>/destdir local:srcdir -r\n");
 }
 
-int remote_sync_file_read(IccomCmdSever &dev,const char *srcfillname,const char *destfillname, bool force)
+int remote_sync_file_write(IccomCmdSever &dev,const char *srcfillname,const char *destfillname,
+    bool force,bool recursive)
 {
-    FILE * fp = NULL;
-    fp = fopen(destfillname, "rb");
-    if(fp) {
-        fclose(fp);
-        if(!force){
-            printf("%s already exists!\n",destfillname);
-            return -1;
+    bool is_dir = false;
+    int size = strlen(srcfillname) + 10;
+    char *cmd = (char *)malloc(size);
+    if(cmd){
+        sprintf(cmd,"[ -d \"%s\" ]",srcfillname);
+        int ret = system((const char *)cmd);
+        if(ret == 0) {
+            is_dir = true;
         }
-        int size = strlen(destfillname) + 4;
-        char *cmd = (char *)malloc(size);
-        if(cmd){
-            sprintf(cmd,"rm %s",destfillname);
-            int _ret = system((const char *)cmd);
-            free(cmd);
+        free(cmd);
+    } else {
+        printf("malloc fail!\n");
+        return -1;
+    }
+    if(is_dir) {
+        if(recursive) {
+            printf(
+                    "Recursive is not supported for now!\n"
+                    "Please contact me at https://github.com/QQxiaoming/iccom-utils/issues.\n"
+                  );
+            return -1;
         } else {
-            printf("malloc fail!\n");
+            icccp_useage();
+            exit(-1);
+        }
+    } else {
+        int tfd = dev.SendVFSOpen(destfillname,O_RDONLY,0);
+        if(tfd > 0) {
+            dev.SendVFSClose(tfd);
+            if(!force){
+                printf("%s already exists!\n",destfillname);
+                return -1;
+            }
+            int size = strlen(destfillname) + 4;
+            char *cmd = (char *)malloc(size);
+            if(cmd){
+                sprintf(cmd,"rm %s",destfillname);
+                dev.SendSYSSystem((const char *)cmd);
+                free(cmd);
+            } else {
+                printf("malloc fail!\n");
+                return -1;
+            }
+        } 
+        
+        uint8_t data[2048];
+        FILE * fp = NULL;
+        int file_size = 0;
+        fp = fopen(srcfillname, "rb");
+        if (!fp) {
+            printf("fopen fail!\n");
             return -1;
         }
-    } 
-    
-    uint8_t data[2048];
-    int file_size = 0;
-    int tfd = dev.SendVFSOpen(srcfillname,O_RDONLY,0);
-    if (tfd<=0) {
-        printf("SendVFSOpen fail!\n");
-        return -1;
-    }
-    file_size = dev.SendVFSLseek(tfd, 0, SEEK_END);
-    if(file_size == -1){
-        printf("SendVFSLseek fail!\n");
-        dev.SendVFSClose(tfd);
-        return -1;
-    }
-    dev.SendVFSLseek(tfd, 0, SEEK_SET);
+        fseek(fp, 0, SEEK_END);
+        file_size = ftell(fp);
+        fseek(fp, 0, SEEK_SET);
 
-    int fd = open(destfillname, O_WRONLY | O_NONBLOCK | O_CREAT, 0);
-	if(fd){
-        for(uint32_t recv_size = 0; recv_size < file_size;) {
-            int32_t size = dev.SendVFSRead(tfd,data, 2048, recv_size);
-            if(size) {
-                fflush(stdout);
-                size_t ws = write(fd,data,size);
-                recv_size += size;
-            } else {
-                dev.SendVFSClose(tfd);
-                close(fd);
-                printf("\nSendVFSRead fail %d!\n",size);
-                break;
+        int fd = dev.SendVFSOpen(destfillname, O_WRONLY | O_NONBLOCK | O_CREAT, 0);
+        if(fd){
+            for(uint32_t send_size = 0; send_size < file_size;) {
+                uint32_t size = fread(data, 1, 2048, fp);
+                if(size) {
+                    fflush(stdout);
+                    int _ret =dev.SendVFSWrite(fd,data,size,send_size);
+                    if(_ret != size) {
+                        dev.SendVFSClose(fd);
+                        fclose(fp);
+                        printf("SendVFSWrite fail %d!\n",_ret);
+                        return -1;
+                    }
+                    send_size += size;
+                } else {
+                    break;
+                }
             }
+        } else {
+            printf("create %s fail!\n",destfillname);
         }
+
+        dev.SendVFSClose(fd);
+        fclose(fp);
+        dev.SendSYSSystem("sync");
+        return 0;
     }
-    close(fd);
-    dev.SendVFSClose(tfd);
-    int sr = system("sync");
-    return 0;
+}
+
+int remote_sync_file_read(IccomCmdSever &dev,const char *srcfillname,const char *destfillname, 
+    bool force,bool recursive)
+{
+    bool is_dir = false;
+    int size = strlen(srcfillname) + 10;
+    char *cmd = (char *)malloc(size);
+    if(cmd){
+        sprintf(cmd,"[ -d \"%s\" ]",srcfillname);
+        int ret = dev.SendSYSSystem((const char *)cmd);
+        if(ret == 0) {
+            is_dir = true;
+        }
+        free(cmd);
+    } else {
+        printf("malloc fail!\n");
+        return -1;
+    }
+    if(is_dir) {
+        if(recursive) {
+            printf(
+                    "Recursive is not supported for now!\n"
+                    "Please contact me at https://github.com/QQxiaoming/iccom-utils/issues.\n"
+                  );
+            return -1;
+        } else {
+            icccp_useage();
+            exit(-1);
+        }
+    } else {
+        FILE * fp = NULL;
+        fp = fopen(destfillname, "rb");
+        if(fp) {
+            fclose(fp);
+            if(!force){
+                printf("%s already exists!\n",destfillname);
+                return -1;
+            }
+            int size = strlen(destfillname) + 4;
+            char *cmd = (char *)malloc(size);
+            if(cmd){
+                sprintf(cmd,"rm %s",destfillname);
+                int _ret = system((const char *)cmd);
+                free(cmd);
+            } else {
+                printf("malloc fail!\n");
+                return -1;
+            }
+        } 
+        
+        uint8_t data[2048];
+        int file_size = 0;
+        int tfd = dev.SendVFSOpen(srcfillname,O_RDONLY,0);
+        if (tfd<=0) {
+            printf("SendVFSOpen fail!\n");
+            return -1;
+        }
+        file_size = dev.SendVFSLseek(tfd, 0, SEEK_END);
+        if(file_size == -1){
+            printf("SendVFSLseek fail!\n");
+            dev.SendVFSClose(tfd);
+            return -1;
+        }
+        dev.SendVFSLseek(tfd, 0, SEEK_SET);
+
+        int fd = open(destfillname, O_WRONLY | O_NONBLOCK | O_CREAT, 0);
+        if(fd){
+            for(uint32_t recv_size = 0; recv_size < file_size;) {
+                int32_t size = dev.SendVFSRead(tfd,data, 2048, recv_size);
+                if(size) {
+                    fflush(stdout);
+                    size_t ws = write(fd,data,size);
+                    recv_size += size;
+                } else {
+                    dev.SendVFSClose(tfd);
+                    close(fd);
+                    printf("\nSendVFSRead fail %d!\n",size);
+                    break;
+                }
+            }
+        } else {
+            printf("create %s fail!\n",destfillname);
+        }
+
+        close(fd);
+        dev.SendVFSClose(tfd);
+        int sr = system("sync");
+        return 0;
+    }
 }
 
 int icccp_main(int argc, char **argv)
@@ -927,23 +999,29 @@ int icccp_main(int argc, char **argv)
     bool force_sync = false;
     bool send = false;
     bool recv = false;
+    bool recursive = false;
     char *srcfile;
     char *destfile;
 
     if(argc < 3) {
-        printf("fail! USEAGE: icccp SRC([Address]:[Path]) DEST([Address]:[Path]) [-f]\n");
-        printf("\te.g.: icccp local:srcfile remote:/destdir/destfile\n");
-        return -1;
+        printf("useage fail!\n");
+        icccp_useage();
+        exit(-1);
     }
 
     for(int i = 3; i < argc; i++) {
         if(strcmp(argv[i], "-f") == 0){
             force_sync = true;
         }
+        if(strcmp(argv[i], "-r") == 0){
+            recursive = true;
+        }
+        if(strcmp(argv[i], "-R") == 0){
+            recursive = true;
+        }
         if(strcmp(argv[i], "-h") == 0){
-            printf("USEAGE: icccp SRC([Address]:[Path]) DEST([Address]:[Path]) [-f]\n");
-            printf("\te.g.: icccp local:srcfile remote:/destdir/destfile\n");
-            return 0;
+            icccp_useage();
+            exit(0);
         }
     }
 
@@ -959,20 +1037,18 @@ int icccp_main(int argc, char **argv)
     }
 
     if((send && recv)||(!send && !recv)) {
-        printf("fail! USEAGE: icccp SRC([Address]:[Path]) DEST([Address]:[Path]) [-f]\n");
-        printf("\te.g.: icccp local:srcfile remote:/destdir/destfile\n");
-        return -1;
+        icccp_useage();
+        exit(-1);
     }
 
     sk.Init();
     if(send) {
-        ret = remote_sync_file_write(sk,srcfile,destfile,force_sync);
+        ret = remote_sync_file_write(sk,srcfile,destfile,force_sync,recursive);
     }
     if(recv) {
-        ret = remote_sync_file_read(sk,srcfile,destfile,force_sync);
+        ret = remote_sync_file_read(sk,srcfile,destfile,force_sync,recursive);
     }
     sk.DeInit();
-
 
     return ret;
 }
