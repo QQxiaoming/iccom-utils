@@ -29,22 +29,22 @@
 /**************************** protocol ****************************/
 class IccomCmdSever
 {
-public:
-    #define RAW_HEADER_KEY         (0x42)
-    #define RAW_MESSAGE_SIZE_BYTES 4096
+private:
+    const static unsigned int RAW_HEADER_KEY = 0x42;
+    const static unsigned int RAW_MESSAGE_SIZE_BYTES = 4096;
 
-    #define PKT_VFS_CMD   1
-    #define PKT_VFS_ACK   2
-    #define PKT_SYS_CMD   3
-    #define PKT_SYS_ACK   4
+    const static unsigned int PKT_VFS_CMD    = 1;
+    const static unsigned int PKT_VFS_ACK    = 2;
+    const static unsigned int PKT_SYS_CMD    = 3;
+    const static unsigned int PKT_SYS_ACK    = 4;
 
-    #define VFS_CMD_OPEN      0
-    #define VFS_CMD_CLOSE     1
-    #define VFS_CMD_WRITE     2
-    #define VFS_CMD_READ      3
-    #define VFS_CMD_LSEEK     4
+    const static unsigned int VFS_CMD_OPEN   = 0;
+    const static unsigned int VFS_CMD_CLOSE  = 1;
+    const static unsigned int VFS_CMD_WRITE  = 2;
+    const static unsigned int VFS_CMD_READ   = 3;
+    const static unsigned int VFS_CMD_LSEEK  = 4;
 
-    #define SYS_CMD_SYSTEM         0
+    const static unsigned int SYS_CMD_SYSTEM = 0;
 
     #pragma pack(push,1)
     typedef struct rawHeader {
@@ -90,7 +90,6 @@ public:
         uint32_t cmd;
         uint8_t payload[0];
     }rawSysHeader;
-
     typedef struct rawSysSystem {
         rawSysHeader header;
         uint8_t data[0];
@@ -126,10 +125,15 @@ public:
         int32_t _errno;
         uint8_t payload[0];
     } rawSysAckHeader;
-
     #define rawSysSystemAck rawSysAckHeader
     #pragma pack(pop)
 
+	IccomSocket *_sock; 
+    uint32_t _nSendId;
+    char _cRecvData[RAW_MESSAGE_SIZE_BYTES];
+    char _cSendData[RAW_MESSAGE_SIZE_BYTES];
+
+public:
     IccomCmdSever(uint16_t port) {
         _sock = new IccomSocket(port);
     }
@@ -139,12 +143,8 @@ public:
         delete _sock;
     }
 
-    IccomCmdSever(const IccomCmdSever &){}
-    void operator=(const IccomCmdSever &){}
-
     int Init(void) {
         _nSendId = 0;
-        _nRepeatLen = 0;
         int ret = _sock->open();
         _sock->set_read_timeout(1000);
         _sock->set_write_timeout(1000);
@@ -352,12 +352,11 @@ private:
         return h->cmd;
     }
 
-    uint32_t VFSAck(void){
+    uint32_t VFSAck(void) {
         rawHeader *sendRaw = (rawHeader *)_cSendData;
         sendRaw->length = 0;
 
-        switch (getVfsCmd(_cRecvData))
-        {
+        switch (getVfsCmd(_cRecvData)) {
         case VFS_CMD_OPEN: {
             rawVfsOpenCmd *cmd = (rawVfsOpenCmd *)_cRecvData;
             int _err = 0,_fd = 0;
@@ -402,7 +401,7 @@ private:
             sendRaw = initRawVfsAckHeader(_cSendData, getRawHeaderId(_cRecvData), _ret, _err, sizeof(*h));
             break;
         }
-        case VFS_CMD_READ:{
+        case VFS_CMD_READ: {
             rawVfsReadCmd *cmd = (rawVfsReadCmd *)_cRecvData;
             uint8_t *read_buf = ((rawVfsReadAck *)sendRaw)->data;
             int _err = 0,_cnt = 0;
@@ -425,7 +424,7 @@ private:
             sendRaw = initRawVfsAckHeader(_cSendData, getRawHeaderId(_cRecvData), _ret, _err, _cnt + sizeof(*h));
             break;
         }
-        case VFS_CMD_LSEEK:{
+        case VFS_CMD_LSEEK: {
             rawVfsLseekCmd *cmd = (rawVfsLseekCmd *)_cRecvData;
             int _ret = lseek(cmd->header.fd,cmd->offset,cmd->whence);
             int _err = 0,_off = 0;
@@ -451,8 +450,7 @@ private:
         rawHeader *sendRaw = (rawHeader *)_cSendData;
         sendRaw->length = 0;
 
-        switch (getSysCmd(_cRecvData))
-        {
+        switch (getSysCmd(_cRecvData)) {
         case SYS_CMD_SYSTEM: {
             rawSysSystem *cmd = (rawSysSystem *)_cRecvData;
             int _err = 0;
@@ -490,7 +488,7 @@ private:
         return -EPIPE;
     }
 
-    int ReceiveMsg(uint32_t& nLen){
+    int ReceiveMsg(uint32_t& nLen) {
         int ret = _sock->receive_direct(_cRecvData,RAW_MESSAGE_SIZE_BYTES);
         if(ret <= 0) {
             nLen = 0;
@@ -502,16 +500,6 @@ private:
             return 0;
         }
     }
-
-public:
-    char                 _cRecvData[RAW_MESSAGE_SIZE_BYTES];
-    char                 _cSendData[RAW_MESSAGE_SIZE_BYTES];
-    char                 _cRepeatData[RAW_MESSAGE_SIZE_BYTES];
-
-private:
-	IccomSocket          *_sock; 
-    uint32_t             _nRepeatLen;
-    uint32_t             _nSendId;
 };
 
 /**************************** common ****************************/
@@ -641,13 +629,11 @@ void *scmd_handler(void *arg) {
 
 /**************************** iccshd ****************************/
 static pid_t iccshd_sh_pid;
-static void iccshd_forward_sig(int sig)
-{
+static void iccshd_forward_sig(int sig) {
     killpg(iccshd_sh_pid,SIGKILL);
 }
 
-static void iccshd_clean_up_and_exit(int sig)
-{
+static void iccshd_clean_up_and_exit(int sig) {
     killpg(getpid(),SIGKILL);
 }
 
@@ -729,8 +715,7 @@ int iccshd_main(int argc, char **argv) {
 /**************************** iccsh ****************************/
 static struct termios iccsh_stdin_termbuf_bak;
 static struct termios iccsh_stdout_termbuf_bak;
-static void iccsh_clean_up_and_exit(int sig)
-{
+static void iccsh_clean_up_and_exit(int sig) {
     static int last_sig = 0;
 
     if((sig == SIGQUIT) || (last_sig == SIGTSTP)) {
@@ -803,8 +788,7 @@ int iccsh_main(int argc, char **argv) {
 }
 
 /**************************** icccp ****************************/
-void icccp_useage(void)
-{
+void icccp_useage(void) {
     printf("USEAGE:\t icccp SRC([Address]:[Path]) DEST([Address]:[Path]) [-f] [-r]\n");
     printf("\t remote must use full path!\n");
     printf("e.g.:\t icccp local:srcfile remote:/<full path>/destfile\n");
@@ -814,12 +798,11 @@ void icccp_useage(void)
 }
 
 int remote_sync_file_write(IccomCmdSever &dev,const char *srcfillname,const char *destfillname,
-    bool force,bool recursive)
-{
+    bool force,bool recursive) {
     bool is_dir = false;
     int size = strlen(srcfillname) + 10;
     char *cmd = (char *)malloc(size);
-    if(cmd){
+    if(cmd) {
         sprintf(cmd,"[ -d \"%s\" ]",srcfillname);
         int ret = system((const char *)cmd);
         if(ret == 0) {
@@ -845,13 +828,13 @@ int remote_sync_file_write(IccomCmdSever &dev,const char *srcfillname,const char
         int tfd = dev.SendVFSOpen(destfillname,O_RDONLY,0);
         if(tfd > 0) {
             dev.SendVFSClose(tfd);
-            if(!force){
+            if(!force) {
                 printf("%s already exists!\n",destfillname);
                 return -1;
             }
             int size = strlen(destfillname) + 4;
             char *cmd = (char *)malloc(size);
-            if(cmd){
+            if(cmd) {
                 sprintf(cmd,"rm %s",destfillname);
                 dev.SendSYSSystem((const char *)cmd);
                 free(cmd);
@@ -874,7 +857,7 @@ int remote_sync_file_write(IccomCmdSever &dev,const char *srcfillname,const char
         fseek(fp, 0, SEEK_SET);
 
         int fd = dev.SendVFSOpen(destfillname, O_WRONLY | O_NONBLOCK | O_CREAT, 0);
-        if(fd){
+        if(fd) {
             for(uint32_t send_size = 0; send_size < file_size;) {
                 uint32_t size = fread(data, 1, 2048, fp);
                 if(size) {
@@ -903,12 +886,11 @@ int remote_sync_file_write(IccomCmdSever &dev,const char *srcfillname,const char
 }
 
 int remote_sync_file_read(IccomCmdSever &dev,const char *srcfillname,const char *destfillname, 
-    bool force,bool recursive)
-{
+    bool force,bool recursive) {
     bool is_dir = false;
     int size = strlen(srcfillname) + 10;
     char *cmd = (char *)malloc(size);
-    if(cmd){
+    if(cmd) {
         sprintf(cmd,"[ -d \"%s\" ]",srcfillname);
         int ret = dev.SendSYSSystem((const char *)cmd);
         if(ret == 0) {
@@ -935,13 +917,13 @@ int remote_sync_file_read(IccomCmdSever &dev,const char *srcfillname,const char 
         fp = fopen(destfillname, "rb");
         if(fp) {
             fclose(fp);
-            if(!force){
+            if(!force) {
                 printf("%s already exists!\n",destfillname);
                 return -1;
             }
             int size = strlen(destfillname) + 4;
             char *cmd = (char *)malloc(size);
-            if(cmd){
+            if(cmd) {
                 sprintf(cmd,"rm %s",destfillname);
                 int _ret = system((const char *)cmd);
                 free(cmd);
@@ -959,7 +941,7 @@ int remote_sync_file_read(IccomCmdSever &dev,const char *srcfillname,const char 
             return -1;
         }
         file_size = dev.SendVFSLseek(tfd, 0, SEEK_END);
-        if(file_size == -1){
+        if(file_size == -1) {
             printf("SendVFSLseek fail!\n");
             dev.SendVFSClose(tfd);
             return -1;
@@ -967,7 +949,7 @@ int remote_sync_file_read(IccomCmdSever &dev,const char *srcfillname,const char 
         dev.SendVFSLseek(tfd, 0, SEEK_SET);
 
         int fd = open(destfillname, O_WRONLY | O_NONBLOCK | O_CREAT, 0);
-        if(fd){
+        if(fd) {
             for(uint32_t recv_size = 0; recv_size < file_size;) {
                 int32_t size = dev.SendVFSRead(tfd,data, 2048, recv_size);
                 if(size) {
@@ -992,8 +974,7 @@ int remote_sync_file_read(IccomCmdSever &dev,const char *srcfillname,const char 
     }
 }
 
-int icccp_main(int argc, char **argv)
-{        
+int icccp_main(int argc, char **argv) {        
     IccomCmdSever sk(ICCOM_CMD_PORT);
     int ret = 0;
     bool force_sync = false;
@@ -1010,16 +991,16 @@ int icccp_main(int argc, char **argv)
     }
 
     for(int i = 3; i < argc; i++) {
-        if(strcmp(argv[i], "-f") == 0){
+        if(strcmp(argv[i], "-f") == 0) {
             force_sync = true;
         }
-        if(strcmp(argv[i], "-r") == 0){
+        if(strcmp(argv[i], "-r") == 0) {
             recursive = true;
         }
-        if(strcmp(argv[i], "-R") == 0){
+        if(strcmp(argv[i], "-R") == 0) {
             recursive = true;
         }
-        if(strcmp(argv[i], "-h") == 0){
+        if(strcmp(argv[i], "-h") == 0) {
             icccp_useage();
             exit(0);
         }
