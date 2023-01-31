@@ -734,6 +734,18 @@ static void iccsh_clean_up_and_exit(int sig) {
 }
 
 int iccsh_main(int argc, char **argv) {
+    if(argc == 3) {
+        if(strcmp(argv[1], "-c") == 0) {
+            int ret = 0;
+            IccomCmdSever sk(ICCOM_CMD_PORT);
+            printf("> %s\n",argv[2]);
+            sk.Init();
+            ret = sk.SendSYSSystem((const char *)argv[2]);
+            sk.DeInit();
+            return ret;
+        }
+    }
+
     int m_stdin,m_stdout;
     int s_stdin,s_stdout;
 
