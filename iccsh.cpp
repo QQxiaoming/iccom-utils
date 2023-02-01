@@ -713,8 +713,16 @@ int iccshd_main(int argc, char **argv) {
 }
 
 /**************************** iccsh ****************************/
+static bool iccsh_debug_log = false;
 static struct termios iccsh_stdin_termbuf_bak;
 static struct termios iccsh_stdout_termbuf_bak;
+
+static void iccsh_useage(void) {
+    printf("USEAGE:\t iccsh [-c <cmd>] [-d]\n");
+    printf("e.g.:\t iccsh\n");
+    printf("\t iccsh -c \"echo hello\"\n");
+}
+
 static void iccsh_clean_up_and_exit(int sig) {
     static int last_sig = 0;
 
@@ -734,16 +742,35 @@ static void iccsh_clean_up_and_exit(int sig) {
 }
 
 int iccsh_main(int argc, char **argv) {
-    if(argc == 3) {
-        if(strcmp(argv[1], "-c") == 0) {
-            int ret = 0;
-            IccomCmdSever sk(ICCOM_CMD_PORT);
-            printf("> %s\n",argv[2]);
-            sk.Init();
-            ret = sk.SendSYSSystem((const char *)argv[2]);
-            sk.DeInit();
-            return ret;
+    char *exe_cmd_arg = nullptr;
+    iccsh_debug_log = false;
+    for(int i = 1; i < argc; i++) {
+        if(strcmp(argv[i], "-c") == 0) {
+            exe_cmd_arg = argv[i+1];
+            if(i+1 < argc) {
+                i++;
+            } else {
+                iccsh_useage();
+                exit(-1);
+            }
         }
+        if(strcmp(argv[i], "-d") == 0) {
+            iccsh_debug_log = true;
+        }
+        if(strcmp(argv[i], "-h") == 0) {
+            iccsh_useage();
+            exit(0);
+        }
+    }
+
+    if(exe_cmd_arg) {
+        int ret = 0;
+        IccomCmdSever sk(ICCOM_CMD_PORT);
+        if(iccsh_debug_log) printf("> %s\n",exe_cmd_arg);
+        sk.Init();
+        ret = sk.SendSYSSystem((const char *)exe_cmd_arg);
+        sk.DeInit();
+        return ret;
     }
 
     int m_stdin,m_stdout;
@@ -800,8 +827,10 @@ int iccsh_main(int argc, char **argv) {
 }
 
 /**************************** icccp ****************************/
-void icccp_useage(void) {
-    printf("USEAGE:\t icccp SRC([Address]:[Path]) DEST([Address]:[Path]) [-f] [-r]\n");
+static bool icccp_debug_log = false;
+
+static void icccp_useage(void) {
+    printf("USEAGE:\t icccp SRC([Address]:[Path]) DEST([Address]:[Path]) [-f] [-r] [-d]\n");
     printf("\t remote must use full path!\n");
     printf("e.g.:\t icccp local:srcfile remote:/<full path>/destfile\n");
     printf("\t icccp remote:/<full path>/srcfile local:destfile\n");
@@ -809,7 +838,7 @@ void icccp_useage(void) {
     printf("\t icccp remote:/<full path>/destdir local:srcdir -r\n");
 }
 
-int remote_sync_file_write(IccomCmdSever &dev,const char *srcfillname,const char *destfillname,
+static int remote_sync_file_write(IccomCmdSever &dev,const char *srcfillname,const char *destfillname,
     bool force,bool recursive) {
     bool is_dir = false;
     int size = strlen(srcfillname) + 10;
@@ -868,11 +897,26 @@ int remote_sync_file_write(IccomCmdSever &dev,const char *srcfillname,const char
         file_size = ftell(fp);
         fseek(fp, 0, SEEK_SET);
 
+        struct timeval tv1,tv2,res;
+        gettimeofday(&tv1, NULL);
+        if(icccp_debug_log) {
+            printf("file:%s size:",srcfillname);
+            if(file_size >= 1024*1024) printf("%.2lfMiB\n",file_size/1024/1024.0);
+            else if(file_size >= 1024) printf("%.2lfKiB\n",file_size/1024.0);
+            else                       printf("%dB\n",file_size);
+        }
+        
         int fd = dev.SendVFSOpen(destfillname, O_WRONLY | O_NONBLOCK | O_CREAT, 0);
         if(fd) {
             for(uint32_t send_size = 0; send_size < file_size;) {
                 uint32_t size = fread(data, 1, 2048, fp);
                 if(size) {
+                    if(icccp_debug_log) {
+                        int progress = send_size*100/file_size;
+                        if(progress >= 100) printf("\r\033[2Ksending... %03d%%",progress);
+                        else if(progress >= 10) printf("\r\033[2Ksending...  %02d%%",progress);
+                        else if(progress >= 0) printf("\r\033[2Ksending...   %01d%%",progress);
+                    }                    
                     fflush(stdout);
                     int _ret =dev.SendVFSWrite(fd,data,size,send_size);
                     if(_ret != size) {
@@ -890,14 +934,22 @@ int remote_sync_file_write(IccomCmdSever &dev,const char *srcfillname,const char
             printf("create %s fail!\n",destfillname);
         }
 
+        if(icccp_debug_log) printf("\r\033[2Ksending... 100%%\n");
         dev.SendVFSClose(fd);
         fclose(fp);
         dev.SendSYSSystem("sync");
+        gettimeofday(&tv2, NULL);
+        timersub(&tv2,&tv1,&res);
+        uint64_t timestamp = (uint64_t)res.tv_sec * 1000000 + res.tv_usec;
+        if(icccp_debug_log) {
+            printf("done %ld.%lds", res.tv_sec, res.tv_usec/10000);
+            printf(" %.2lfKiB/s\n",file_size*1000000.0/1024/timestamp);
+        }
         return 0;
     }
 }
 
-int remote_sync_file_read(IccomCmdSever &dev,const char *srcfillname,const char *destfillname, 
+static int remote_sync_file_read(IccomCmdSever &dev,const char *srcfillname,const char *destfillname, 
     bool force,bool recursive) {
     bool is_dir = false;
     int size = strlen(srcfillname) + 10;
@@ -960,11 +1012,26 @@ int remote_sync_file_read(IccomCmdSever &dev,const char *srcfillname,const char 
         }
         dev.SendVFSLseek(tfd, 0, SEEK_SET);
 
+        struct timeval tv1,tv2,res;
+        gettimeofday(&tv1, NULL);
+        if(icccp_debug_log) {
+            printf("file:%s size:",srcfillname);
+            if(file_size >= 1024*1024) printf("%.2lfMiB\n",file_size/1024/1024.0);
+            else if(file_size >= 1024) printf("%.2lfKiB\n",file_size/1024.0);
+            else                       printf("%dB\n",file_size);
+        }
+
         int fd = open(destfillname, O_WRONLY | O_NONBLOCK | O_CREAT, 0);
         if(fd) {
             for(uint32_t recv_size = 0; recv_size < file_size;) {
                 int32_t size = dev.SendVFSRead(tfd,data, 2048, recv_size);
                 if(size) {
+                    if(icccp_debug_log) {
+                        int progress = recv_size*100/file_size;
+                        if(progress >= 100) printf("\r\033[2Krecving... %03d%%",progress);
+                        else if(progress >= 10) printf("\r\033[2Krecving...  %02d%%",progress);
+                        else if(progress >= 0) printf("\r\033[2Krecving...   %01d%%",progress);
+                    }
                     fflush(stdout);
                     size_t ws = write(fd,data,size);
                     recv_size += size;
@@ -979,9 +1046,17 @@ int remote_sync_file_read(IccomCmdSever &dev,const char *srcfillname,const char 
             printf("create %s fail!\n",destfillname);
         }
 
+        if(icccp_debug_log) printf("\r\033[2Krecving... 100%%\n");
         close(fd);
         dev.SendVFSClose(tfd);
         int sr = system("sync");
+        gettimeofday(&tv2, NULL);
+        timersub(&tv2,&tv1,&res);
+        uint64_t timestamp = (uint64_t)res.tv_sec * 1000000 + res.tv_usec;
+        if(icccp_debug_log) {
+            printf("done %ld.%lds", res.tv_sec, res.tv_usec/10000);
+            printf(" %.2lfKiB/s\n",file_size*1000000.0/1024/timestamp);
+        }
         return 0;
     }
 }
@@ -1006,10 +1081,10 @@ int icccp_main(int argc, char **argv) {
         if(strcmp(argv[i], "-f") == 0) {
             force_sync = true;
         }
-        if(strcmp(argv[i], "-r") == 0) {
-            recursive = true;
+        if(strcmp(argv[i], "-d") == 0) {
+            icccp_debug_log = true;
         }
-        if(strcmp(argv[i], "-R") == 0) {
+        if(strcmp(argv[i], "-r") == 0) {
             recursive = true;
         }
         if(strcmp(argv[i], "-h") == 0) {
