@@ -12,6 +12,8 @@
 
 #include "iccom.h"
 
+#define VERSION         "V0.1.1"
+
 /*! Build Opt Macro */
 #define BUILD_ICCSHD    0
 #define BUILD_ICCSH     1
@@ -514,7 +516,13 @@ void iccom2fd_loop(unsigned int iccom_port, int fd) {
     fd_set rfds;
     struct timeval tv{0, 0};
     char buf[4097] = {0};
+
+retry:
     sk.open();
+    if(!sk.is_open()) {
+        sleep(1);
+        goto retry;
+    }
     sk.set_read_timeout(0);
     
     while(1) {
@@ -542,8 +550,15 @@ void fd2iccom_loop(unsigned int iccom_port, int fd) {
     fd_set rfds;
     struct timeval tv{0, 0};
     char buf[4097] = {0};
+
+retry:
     sk.open();
+    if(!sk.is_open()) {
+        sleep(1);
+        goto retry;
+    }
     sk.set_read_timeout(0);
+    sk.send_direct("\n",1);
     
     while(1) {
         FD_ZERO(&rfds);
@@ -628,7 +643,14 @@ void *scmd_handler(void *arg) {
 }
 
 /**************************** iccshd ****************************/
+static bool iccshd_debug_log = false;
 static pid_t iccshd_sh_pid;
+
+static void iccshd_useage(void) {
+    printf("USEAGE:\t iccsd\n");
+    printf("e.g.:\t iccsd\n");
+}
+
 static void iccshd_forward_sig(int sig) {
     killpg(iccshd_sh_pid,SIGKILL);
 }
@@ -640,6 +662,20 @@ static void iccshd_clean_up_and_exit(int sig) {
 int iccshd_main(int argc, char **argv) {
     int m_stdin,m_stdout;
     int s_stdin,s_stdout;
+
+    for(int i = 1; i < argc; i++) {
+        if(strcmp(argv[i], "-d") == 0) {
+            iccshd_debug_log = true;
+        }        
+        if(strcmp(argv[i], "-v") == 0) {
+            printf("%s %s\n",argv[0],VERSION);
+            exit(0);
+        }
+        if(strcmp(argv[i], "-h") == 0) {
+            iccshd_useage();
+            exit(0);
+        }
+    }
 
     setsid();
     openpty(&m_stdin, &s_stdin, NULL, NULL, NULL);
@@ -735,6 +771,7 @@ static void iccsh_clean_up_and_exit(int sig) {
     } else if(last_sig == SIGINT) {
         last_sig = 0;
         //forward sig to iccshd
+        printf("\n");
         csig_handler(&sig);
     } else {
         last_sig = sig;
@@ -756,6 +793,10 @@ int iccsh_main(int argc, char **argv) {
         }
         if(strcmp(argv[i], "-d") == 0) {
             iccsh_debug_log = true;
+        }        
+        if(strcmp(argv[i], "-v") == 0) {
+            printf("%s %s\n",argv[0],VERSION);
+            exit(0);
         }
         if(strcmp(argv[i], "-h") == 0) {
             iccsh_useage();
@@ -772,6 +813,8 @@ int iccsh_main(int argc, char **argv) {
         sk.DeInit();
         return ret;
     }
+    printf("Will enter the target terminal...");
+    fflush(stdout);
 
     int m_stdin,m_stdout;
     int s_stdin,s_stdout;
@@ -1087,6 +1130,10 @@ int icccp_main(int argc, char **argv) {
         if(strcmp(argv[i], "-r") == 0) {
             recursive = true;
         }
+        if(strcmp(argv[i], "-v") == 0) {
+            printf("%s %s\n",argv[0],VERSION);
+            exit(0);
+        }        
         if(strcmp(argv[i], "-h") == 0) {
             icccp_useage();
             exit(0);
