@@ -54,5 +54,5 @@ Examples:
 - [ ] iccsh support encryption
 - [ ] iccshd support custom port num
 - [ ] iccshd support Multi-terminal connection
-- [ ] icccp support recursive
-- [ ] icccp improve the way the target path is a directory
+- [x] icccp support recursive
+- [x] icccp improve the way the target path is a directory

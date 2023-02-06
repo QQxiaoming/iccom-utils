@@ -9,10 +9,12 @@
 #include <pthread.h>
 #include <fcntl.h>
 #include <sys/time.h>
+#include <libgen.h>
+#include <dirent.h>
 
 #include "iccom.h"
 
-#define VERSION         "V0.1.1"
+#define VERSION         "V0.1.2"
 
 /*! Build Opt Macro */
 #define BUILD_ICCSHD    0
@@ -47,6 +49,7 @@ private:
     const static unsigned int VFS_CMD_LSEEK  = 4;
 
     const static unsigned int SYS_CMD_SYSTEM = 0;
+    const static unsigned int SYS_CMD_SCANDIR = 1;
 
     #pragma pack(push,1)
     typedef struct rawHeader {
@@ -96,6 +99,10 @@ private:
         rawSysHeader header;
         uint8_t data[0];
     } rawSysSystem;
+    typedef struct rawSysScanDir {
+        rawSysHeader header;
+        uint8_t path[0];
+    } rawSysScanDir;
     typedef struct rawVfsAckHeader {
         rawHeader header;
         int32_t ret;
@@ -128,6 +135,12 @@ private:
         uint8_t payload[0];
     } rawSysAckHeader;
     #define rawSysSystemAck rawSysAckHeader
+    typedef struct rawSysScanDirAck {
+        rawSysAckHeader header;
+        uint32_t flag;
+        uint8_t type;
+        uint8_t data[0];
+    } rawSysOpendirAck;
     #pragma pack(pop)
 
 	IccomSocket *_sock; 
@@ -286,6 +299,42 @@ public:
                 errno = recv->_errno;
             } 
             return recv->ret;
+        }
+        return -EPIPE;
+    }
+
+    int SendSYSScanDir(const char *path,char *buffer,int buff_num) {
+        int retry_index = 0;
+        int num = 0;
+        rawSysScanDir *h = (rawSysScanDir *)_cSendData;
+        uint32_t len = strlen(path);
+        memcpy(h->path, path, len);
+        h->path[len] = '\0';
+        rawHeader *sendRaw = initRawSysHeader(_cSendData, _nSendId++, SYS_CMD_SCANDIR, (sizeof(*h) + len + 1));
+        if (sendRaw->length > 0) {
+            int ret = _sock->send_direct(_cSendData,sendRaw->length);
+            if(ret == 0) {
+            recv:
+                retry_index = 0;
+                do {
+                    ret = _sock->receive_direct(_cRecvData,RAW_MESSAGE_SIZE_BYTES);
+                    retry_index++;
+                } while(ret <= 0 && retry_index < 5);
+                if (ret > 0) {
+                    int w_len = 0;
+                    rawSysScanDirAck *ack = (rawSysScanDirAck *)_cRecvData;
+                    if (ack->flag == 0) {
+                        num++;
+                        if(num<=buff_num) {
+                            buffer[0+(257*(num-1))] = ack->type;
+                            memcpy(&buffer[1+(257*(num-1))],ack->data,256);
+                        }
+                        goto recv;
+                    } else {
+                        return num;
+                    }
+                }
+            }
         }
         return -EPIPE;
     }
@@ -461,6 +510,27 @@ private:
                 _err = errno;
             }
             sendRaw = initRawSysAckHeader(_cSendData, getRawHeaderId(_cRecvData), _ret, _err, sizeof(rawSysSystemAck));
+            break;
+        }
+        case SYS_CMD_SCANDIR: {
+            rawSysScanDir *cmd = (rawSysScanDir *)_cRecvData;
+            rawSysScanDirAck *h = (rawSysScanDirAck *)_cSendData;
+            DIR *dp;
+            struct dirent *ep;     
+            dp = opendir((const char *)cmd->path);
+            if(dp != NULL) {
+                while((ep = readdir (dp)) != NULL) {
+                    h->flag = 0;
+                    h->type = ep->d_type;
+                    memcpy(h->data,ep->d_name,256);
+                    h->data[strlen(ep->d_name)] = '\0';
+                    sendRaw = initRawSysAckHeader(_cSendData, getRawHeaderId(_cRecvData), 0, 0, 256 + sizeof(*h));
+                    int ret = _sock->send_direct(_cSendData,sendRaw->length);
+                }
+                closedir(dp);
+            }
+            h->flag = 1;
+            sendRaw = initRawSysAckHeader(_cSendData, getRawHeaderId(_cRecvData), 0, 0, sizeof(*h));
             break;
         }
         default:
@@ -881,13 +951,12 @@ static void icccp_useage(void) {
     printf("\t icccp remote:/<full path>/destdir local:srcdir -r\n");
 }
 
-static int remote_sync_file_write(IccomCmdSever &dev,const char *srcfillname,const char *destfillname,
-    bool force,bool recursive) {
+static bool local_is_dir(IccomCmdSever &dev,const char *filepath) {
     bool is_dir = false;
-    int size = strlen(srcfillname) + 10;
+    int size = strlen(filepath) + 10;
     char *cmd = (char *)malloc(size);
     if(cmd) {
-        sprintf(cmd,"[ -d \"%s\" ]",srcfillname);
+        sprintf(cmd,"[ -d \"%s\" ]",filepath);
         int ret = system((const char *)cmd);
         if(ret == 0) {
             is_dir = true;
@@ -895,31 +964,112 @@ static int remote_sync_file_write(IccomCmdSever &dev,const char *srcfillname,con
         free(cmd);
     } else {
         printf("malloc fail!\n");
-        return -1;
     }
-    if(is_dir) {
-        if(recursive) {
-            printf(
-                    "Recursive is not supported for now!\n"
-                    "Please contact me at https://github.com/QQxiaoming/iccom-utils/issues.\n"
-                  );
-            return -1;
+    return is_dir;
+}
+
+static bool remote_is_dir(IccomCmdSever &dev,const char *filepath) {
+    bool is_dir = false;
+    int size = strlen(filepath) + 10;
+    char *cmd = (char *)malloc(size);
+    if(cmd) {
+        sprintf(cmd,"[ -d \"%s\" ]",filepath);
+        int ret = dev.SendSYSSystem((const char *)cmd);
+        if(ret == 0) {
+            is_dir = true;
+        }
+        free(cmd);
+    } else {
+        printf("malloc fail!\n");
+    }
+    return is_dir;
+}
+
+static int remote_sync_file_write(IccomCmdSever &dev,const char *srcfilepath,const char *destfilepath,
+    bool force,bool recursive) {
+    bool src_is_dir = local_is_dir(dev,srcfilepath);
+    bool dest_is_dir = remote_is_dir(dev,destfilepath);
+    if(src_is_dir) {
+        if(dest_is_dir && recursive) {
+            int size = strlen(destfilepath)+strlen(basename((char *)srcfilepath)) + 10;
+            char *cmd = (char *)malloc(size);
+            if(cmd) {
+                sprintf(cmd,"mkdir %s/%s",destfilepath,basename((char *)srcfilepath));
+                dev.SendSYSSystem((const char *)cmd);
+                free(cmd);
+            } else {
+                printf("malloc fail!\n");
+                return -1;
+            }
+
+            DIR *dp;
+            struct dirent *ep;     
+            dp = opendir(srcfilepath);
+            if(dp != NULL) {
+                while((ep = readdir (dp)) != NULL) {
+                    if(strcmp(ep->d_name,".") == 0 || strcmp(ep->d_name,"..") == 0 ) {
+                        continue;
+                    }
+                    if(ep->d_type != DT_DIR && ep->d_type != DT_REG) {
+                        continue;
+                    }
+                    char *subsrcfilename = (char *)malloc(strlen(srcfilepath)+strlen(ep->d_name)+2);
+                    char *subdestfilename = (char *)malloc(strlen(destfilepath)+strlen(basename((char *)srcfilepath))+2);
+                    if(subsrcfilename && subdestfilename) {
+                        sprintf(subsrcfilename,"%s/%s",srcfilepath,ep->d_name);
+                        sprintf(subdestfilename,"%s/%s",destfilepath,basename((char *)srcfilepath));
+                        remote_sync_file_write(dev,subsrcfilename,subdestfilename,force,recursive);
+                        free(subsrcfilename);
+                        free(subdestfilename);
+                    } else {
+                        printf("malloc fail!\n");
+                        free(subsrcfilename);
+                        free(subdestfilename);
+                        return -1;
+                    }
+                }
+                closedir(dp);
+                return 0;
+            } else {
+                printf("Couldn't open the srcfilepath\n");
+                return -1;
+            }
         } else {
-            icccp_useage();
+            printf("Destfilepath must be an existing path!\n");
             exit(-1);
         }
     } else {
-        int tfd = dev.SendVFSOpen(destfillname,O_RDONLY,0);
+        char *destfilename = nullptr;
+        if(dest_is_dir) {
+            char *filename = basename((char *)srcfilepath);
+            destfilename = (char *)malloc(strlen(filename)+strlen(destfilepath)+2);
+            if(destfilename) {
+                sprintf(destfilename,"%s/%s",destfilepath,filename);
+            } else {
+                printf("malloc fail!\n");
+                return -1;
+            }
+        } else {
+            destfilename = (char *)malloc(strlen(destfilepath)+2);
+            if(destfilename) {
+                sprintf(destfilename,"%s",destfilepath);
+            } else {
+                printf("malloc fail!\n");
+                return -1;
+            }
+        }
+
+        int tfd = dev.SendVFSOpen(destfilename,O_RDONLY,0);
         if(tfd > 0) {
             dev.SendVFSClose(tfd);
             if(!force) {
-                printf("%s already exists!\n",destfillname);
+                printf("%s already exists!\n",destfilename);
                 return -1;
             }
-            int size = strlen(destfillname) + 4;
+            int size = strlen(destfilename) + 4;
             char *cmd = (char *)malloc(size);
             if(cmd) {
-                sprintf(cmd,"rm %s",destfillname);
+                sprintf(cmd,"rm %s",destfilename);
                 dev.SendSYSSystem((const char *)cmd);
                 free(cmd);
             } else {
@@ -931,7 +1081,7 @@ static int remote_sync_file_write(IccomCmdSever &dev,const char *srcfillname,con
         uint8_t data[2048];
         FILE * fp = NULL;
         int file_size = 0;
-        fp = fopen(srcfillname, "rb");
+        fp = fopen(srcfilepath, "rb");
         if (!fp) {
             printf("fopen fail!\n");
             return -1;
@@ -943,13 +1093,13 @@ static int remote_sync_file_write(IccomCmdSever &dev,const char *srcfillname,con
         struct timeval tv1,tv2,res;
         gettimeofday(&tv1, NULL);
         if(icccp_debug_log) {
-            printf("file:%s size:",srcfillname);
+            printf("file:%s size:",basename((char *)srcfilepath));
             if(file_size >= 1024*1024) printf("%.2lfMiB\n",file_size/1024/1024.0);
             else if(file_size >= 1024) printf("%.2lfKiB\n",file_size/1024.0);
             else                       printf("%dB\n",file_size);
         }
-        
-        int fd = dev.SendVFSOpen(destfillname, O_WRONLY | O_NONBLOCK | O_CREAT, 0);
+
+        int fd = dev.SendVFSOpen(destfilename, O_WRONLY | O_NONBLOCK | O_CREAT, 0);
         if(fd) {
             for(uint32_t send_size = 0; send_size < file_size;) {
                 uint32_t size = fread(data, 1, 2048, fp);
@@ -959,7 +1109,7 @@ static int remote_sync_file_write(IccomCmdSever &dev,const char *srcfillname,con
                         if(progress >= 100) printf("\r\033[2Ksending... %03d%%",progress);
                         else if(progress >= 10) printf("\r\033[2Ksending...  %02d%%",progress);
                         else if(progress >= 0) printf("\r\033[2Ksending...   %01d%%",progress);
-                    }                    
+                    }
                     fflush(stdout);
                     int _ret =dev.SendVFSWrite(fd,data,size,send_size);
                     if(_ret != size) {
@@ -974,7 +1124,7 @@ static int remote_sync_file_write(IccomCmdSever &dev,const char *srcfillname,con
                 }
             }
         } else {
-            printf("create %s fail!\n",destfillname);
+            printf("create %s fail!\n",destfilename);
         }
 
         if(icccp_debug_log) printf("\r\033[2Ksending... 100%%\n");
@@ -988,61 +1138,106 @@ static int remote_sync_file_write(IccomCmdSever &dev,const char *srcfillname,con
             printf("done %ld.%lds", res.tv_sec, res.tv_usec/10000);
             printf(" %.2lfKiB/s\n",file_size*1000000.0/1024/timestamp);
         }
+        free(destfilename);
         return 0;
     }
 }
 
-static int remote_sync_file_read(IccomCmdSever &dev,const char *srcfillname,const char *destfillname, 
+static int remote_sync_file_read(IccomCmdSever &dev,const char *srcfilepath,const char *destfilepath, 
     bool force,bool recursive) {
-    bool is_dir = false;
-    int size = strlen(srcfillname) + 10;
-    char *cmd = (char *)malloc(size);
-    if(cmd) {
-        sprintf(cmd,"[ -d \"%s\" ]",srcfillname);
-        int ret = dev.SendSYSSystem((const char *)cmd);
-        if(ret == 0) {
-            is_dir = true;
-        }
-        free(cmd);
-    } else {
-        printf("malloc fail!\n");
-        return -1;
-    }
-    if(is_dir) {
-        if(recursive) {
-            printf(
-                    "Recursive is not supported for now!\n"
-                    "Please contact me at https://github.com/QQxiaoming/iccom-utils/issues.\n"
-                  );
-            return -1;
+    bool src_is_dir = remote_is_dir(dev,srcfilepath);
+    bool dest_is_dir = local_is_dir(dev,destfilepath);
+    if(src_is_dir) {
+        if(dest_is_dir && recursive) {
+            int size = strlen(destfilepath)+strlen(basename((char *)srcfilepath)) + 10;
+            char *cmd = (char *)malloc(size);
+            if(cmd) {
+                sprintf(cmd,"mkdir %s/%s",destfilepath,basename((char *)srcfilepath));
+                int sr = system((const char *)cmd);
+                free(cmd);
+            } else {
+                printf("malloc fail!\n");
+                return -1;
+            }
+
+            int dpnum = dev.SendSYSScanDir(srcfilepath,nullptr,0);
+            if(dpnum != 0) {
+                char *info = (char *)malloc(dpnum*257);
+                dev.SendSYSScanDir(srcfilepath,info,dpnum);
+                for(int i=0; i < dpnum; i++ ) {
+                    if(strcmp(&info[i*257+1],".") == 0 || strcmp(&info[i*257+1],"..") == 0 ) {
+                        continue;
+                    }
+                    if(info[i*257+0] != DT_DIR && info[i*257+0] != DT_REG) {
+                        continue;
+                    }
+                    char *subsrcfilename = (char *)malloc(strlen(srcfilepath)+strlen(&info[i*257+1])+2);
+                    char *subdestfilename = (char *)malloc(strlen(destfilepath)+strlen(basename((char *)srcfilepath))+2);
+                    if(subsrcfilename && subdestfilename) {
+                        sprintf(subsrcfilename,"%s/%s",srcfilepath,&info[i*257+1]);
+                        sprintf(subdestfilename,"%s/%s",destfilepath,basename((char *)srcfilepath));
+                        remote_sync_file_read(dev,subsrcfilename,subdestfilename,force,recursive);
+                        free(subsrcfilename);
+                        free(subdestfilename);
+                    } else {
+                        printf("malloc fail!\n");
+                        free(subsrcfilename);
+                        free(subdestfilename);
+                        return -1;
+                    }
+                }
+                return 0;
+            } else {
+                return 0;
+            }
         } else {
-            icccp_useage();
+            printf("Destfilepath must be an existing path!\n");
             exit(-1);
         }
     } else {
+        char *destfilename = nullptr;
+        if(dest_is_dir) {
+            char *filename = basename((char *)srcfilepath);
+            destfilename = (char *)malloc(strlen(filename)+strlen(destfilepath)+2);
+            if(destfilename) {
+                sprintf(destfilename,"%s/%s",destfilepath,filename);
+            } else {
+                printf("malloc fail!\n");
+                return -1;
+            }
+        } else {
+            destfilename = (char *)malloc(strlen(destfilepath)+2);
+            if(destfilename) {
+                sprintf(destfilename,"%s",destfilepath);
+            } else {
+                printf("malloc fail!\n");
+                return -1;
+            }
+        }
+
         FILE * fp = NULL;
-        fp = fopen(destfillname, "rb");
+        fp = fopen(destfilename, "rb");
         if(fp) {
             fclose(fp);
             if(!force) {
-                printf("%s already exists!\n",destfillname);
+                printf("%s already exists!\n",destfilename);
                 return -1;
             }
-            int size = strlen(destfillname) + 4;
+            int size = strlen(destfilename) + 4;
             char *cmd = (char *)malloc(size);
             if(cmd) {
-                sprintf(cmd,"rm %s",destfillname);
-                int _ret = system((const char *)cmd);
+                sprintf(cmd,"rm %s",destfilename);
+                int sr = system((const char *)cmd);
                 free(cmd);
             } else {
                 printf("malloc fail!\n");
                 return -1;
             }
         } 
-        
+
         uint8_t data[2048];
         int file_size = 0;
-        int tfd = dev.SendVFSOpen(srcfillname,O_RDONLY,0);
+        int tfd = dev.SendVFSOpen(srcfilepath,O_RDONLY,0);
         if (tfd<=0) {
             printf("SendVFSOpen fail!\n");
             return -1;
@@ -1058,13 +1253,13 @@ static int remote_sync_file_read(IccomCmdSever &dev,const char *srcfillname,cons
         struct timeval tv1,tv2,res;
         gettimeofday(&tv1, NULL);
         if(icccp_debug_log) {
-            printf("file:%s size:",srcfillname);
+            printf("file:%s size:",basename((char *)srcfilepath));
             if(file_size >= 1024*1024) printf("%.2lfMiB\n",file_size/1024/1024.0);
             else if(file_size >= 1024) printf("%.2lfKiB\n",file_size/1024.0);
             else                       printf("%dB\n",file_size);
         }
 
-        int fd = open(destfillname, O_WRONLY | O_NONBLOCK | O_CREAT, 0);
+        int fd = open(destfilename, O_WRONLY | O_NONBLOCK | O_CREAT, 0);
         if(fd) {
             for(uint32_t recv_size = 0; recv_size < file_size;) {
                 int32_t size = dev.SendVFSRead(tfd,data, 2048, recv_size);
@@ -1086,7 +1281,7 @@ static int remote_sync_file_read(IccomCmdSever &dev,const char *srcfillname,cons
                 }
             }
         } else {
-            printf("create %s fail!\n",destfillname);
+            printf("create %s fail!\n",destfilename);
         }
 
         if(icccp_debug_log) printf("\r\033[2Krecving... 100%%\n");
@@ -1100,6 +1295,7 @@ static int remote_sync_file_read(IccomCmdSever &dev,const char *srcfillname,cons
             printf("done %ld.%lds", res.tv_sec, res.tv_usec/10000);
             printf(" %.2lfKiB/s\n",file_size*1000000.0/1024/timestamp);
         }
+        free(destfilename);
         return 0;
     }
 }
@@ -1133,7 +1329,7 @@ int icccp_main(int argc, char **argv) {
         if(strcmp(argv[i], "-v") == 0) {
             printf("%s %s\n",argv[0],VERSION);
             exit(0);
-        }        
+        }
         if(strcmp(argv[i], "-h") == 0) {
             icccp_useage();
             exit(0);
