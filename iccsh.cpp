@@ -36,6 +36,7 @@ class IccomCmdSever
 private:
     const static unsigned int RAW_HEADER_KEY = 0x42;
     const static unsigned int RAW_MESSAGE_SIZE_BYTES = 4096;
+    const static unsigned int RAW_RETURY_MAX_CNT = 30;
 
     const static unsigned int PKT_VFS_CMD    = 1;
     const static unsigned int PKT_VFS_ACK    = 2;
@@ -319,7 +320,7 @@ public:
                 do {
                     ret = _sock->receive_direct(_cRecvData,RAW_MESSAGE_SIZE_BYTES);
                     retry_index++;
-                } while(ret <= 0 && retry_index < 5);
+                } while(ret <= 0 && retry_index < RAW_RETURY_MAX_CNT);
                 if (ret > 0) {
                     int w_len = 0;
                     rawSysScanDirAck *ack = (rawSysScanDirAck *)_cRecvData;
@@ -549,7 +550,7 @@ private:
                 do {
                     ret = _sock->receive_direct(_cRecvData,RAW_MESSAGE_SIZE_BYTES);
                     retry_index++;
-                } while(ret <= 0 && retry_index < 5);
+                } while(ret <= 0 && retry_index < RAW_RETURY_MAX_CNT);
                 if(isRawHeader(_cRecvData) &&
                     getRawHeaderId(_cRecvData) == sendRaw->id && 
                     getRawHeaderType(_cRecvData) == sendRaw->pkt_type+1) {
@@ -865,7 +866,7 @@ int iccsh_main(int argc, char **argv) {
             iccsh_debug_log = true;
         }        
         if(strcmp(argv[i], "-v") == 0) {
-            printf("%s %s\n",basename(argv[0]),VERSION);
+            printf("%s %s\n",argv[0],VERSION);
             exit(0);
         }
         if(strcmp(argv[i], "-h") == 0) {
@@ -1329,19 +1330,32 @@ int icccp_main(int argc, char **argv) {
             if(!srcavg) 
                 srcavg = argv[i];
             else if(!destfile) 
-                destfile = argv[i];
+                destavg = argv[i];
         }
     }
 
-    if((strncmp(srcavg,"local:",6) == 0)&&(strncmp(destfile,"remote:",7) == 0)) {
-        send = true;
-        srcfile = &srcavg[6];
-        destfile = &destfile[7];
+    if(!srcavg || !destavg) {
+        icccp_useage();
+        exit(-1);
     }
-    if((strncmp(srcavg,"remote:",7) == 0)&&(strncmp(destfile,"local:",6) == 0)) {
+
+    if(strncmp(destavg,"remote:",7) == 0) {
+        send = true;
+        destfile = &destavg[7];
+        if(strncmp(srcavg,"local:",6) == 0) {
+            srcfile = &srcavg[6];
+        } else {
+            srcfile = &srcavg[0];
+        }
+    }
+    if(strncmp(srcavg,"remote:",7) == 0) {
         recv = true;
         srcfile = &srcavg[7];
-        destfile = &destfile[6];
+        if(strncmp(destavg,"local:",6) == 0) {
+            destfile = &destavg[6];
+        } else {
+            destfile = &destavg[0];
+        }
     }
 
     if((send && recv)||(!send && !recv)) {
