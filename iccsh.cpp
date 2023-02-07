@@ -738,7 +738,7 @@ int iccshd_main(int argc, char **argv) {
             iccshd_debug_log = true;
         }        
         if(strcmp(argv[i], "-v") == 0) {
-            printf("%s %s\n",argv[0],VERSION);
+            printf("%s %s\n",basename(argv[0]),VERSION);
             exit(0);
         }
         if(strcmp(argv[i], "-h") == 0) {
@@ -865,7 +865,7 @@ int iccsh_main(int argc, char **argv) {
             iccsh_debug_log = true;
         }        
         if(strcmp(argv[i], "-v") == 0) {
-            printf("%s %s\n",argv[0],VERSION);
+            printf("%s %s\n",basename(argv[0]),VERSION);
             exit(0);
         }
         if(strcmp(argv[i], "-h") == 0) {
@@ -1307,44 +1307,41 @@ int icccp_main(int argc, char **argv) {
     bool send = false;
     bool recv = false;
     bool recursive = false;
-    char *srcfile;
-    char *destfile;
+    char *srcavg = nullptr;
+    char *destavg = nullptr;
+    char *srcfile = nullptr;
+    char *destfile = nullptr;
 
-    if(argc < 3) {
-        printf("useage fail!\n");
-        icccp_useage();
-        exit(-1);
-    }
-
-    for(int i = 3; i < argc; i++) {
+    for(int i = 1; i < argc; i++) {
         if(strcmp(argv[i], "-f") == 0) {
             force_sync = true;
-        }
-        if(strcmp(argv[i], "-d") == 0) {
+        } else if(strcmp(argv[i], "-d") == 0) {
             icccp_debug_log = true;
-        }
-        if(strcmp(argv[i], "-r") == 0) {
+        } else if(strcmp(argv[i], "-r") == 0) {
             recursive = true;
-        }
-        if(strcmp(argv[i], "-v") == 0) {
-            printf("%s %s\n",argv[0],VERSION);
+        } else if(strcmp(argv[i], "-v") == 0) {
+            printf("%s %s\n",basename(argv[0]),VERSION);
             exit(0);
-        }
-        if(strcmp(argv[i], "-h") == 0) {
+        } else if(strcmp(argv[i], "-h") == 0) {
             icccp_useage();
             exit(0);
+        } else {
+            if(!srcavg) 
+                srcavg = argv[i];
+            else if(!destfile) 
+                destfile = argv[i];
         }
     }
 
-    if((strncmp(argv[1],"local:",6) == 0)&&(strncmp(argv[2],"remote:",7) == 0)) {
+    if((strncmp(srcavg,"local:",6) == 0)&&(strncmp(destfile,"remote:",7) == 0)) {
         send = true;
-        srcfile = &argv[1][6];
-        destfile = &argv[2][7];
+        srcfile = &srcavg[6];
+        destfile = &destfile[7];
     }
-    if((strncmp(argv[1],"remote:",7) == 0)&&(strncmp(argv[2],"local:",6) == 0)) {
+    if((strncmp(srcavg,"remote:",7) == 0)&&(strncmp(destfile,"local:",6) == 0)) {
         recv = true;
-        srcfile = &argv[1][7];
-        destfile = &argv[2][6];
+        srcfile = &srcavg[7];
+        destfile = &destfile[6];
     }
 
     if((send && recv)||(!send && !recv)) {
