@@ -582,7 +582,7 @@ private:
  * @param iccom_port Source iccom port num
  * @param fd Destin fd
  */
-void iccom2fd_loop(unsigned int iccom_port, int fd) {
+void iccom2fd_loop(unsigned int iccom_port, int fd,const char* start_message) {
     IccomSocket sk{iccom_port};
     fd_set rfds;
     struct timeval tv{0, 0};
@@ -595,7 +595,11 @@ retry:
         goto retry;
     }
     sk.set_read_timeout(0);
-    
+    if(start_message) {
+        size_t ws = write(fd, start_message, strlen(start_message));
+		fsync(fd);
+    }
+
     while(1) {
         if (sk.receive() >= 0) {
             int size = sk.input_size();
@@ -616,7 +620,7 @@ retry:
  * @param iccom_port Destin iccom port num
  * @param fd Source fd
  */
-void fd2iccom_loop(unsigned int iccom_port, int fd) {
+void fd2iccom_loop(unsigned int iccom_port, int fd,const char* start_message) {
     IccomSocket sk{iccom_port};
     fd_set rfds;
     struct timeval tv{0, 0};
@@ -629,7 +633,8 @@ retry:
         goto retry;
     }
     sk.set_read_timeout(0);
-    sk.send_direct("\n",1);
+    if(start_message)
+        sk.send_direct(start_message,strlen(start_message));
     
     while(1) {
         FD_ZERO(&rfds);
@@ -646,32 +651,40 @@ retry:
 /**
  * @brief Server stdin forward handler
  */
+struct sin_arg_t {int fd;};
 void *sin_handler(void *arg) {
-    iccom2fd_loop(ICCOM_SKIN_PORT,*(int *)arg);
+    struct sin_arg_t *sin_arg = (struct sin_arg_t *)arg;
+    iccom2fd_loop(ICCOM_SKIN_PORT,sin_arg->fd,nullptr);
     return NULL;
 }
 
 /**
  * @brief Client stdin forward handler
  */
+struct cin_arg_t {int fd; const char *message;};
 void *cin_handler(void *arg) {
-    fd2iccom_loop(ICCOM_SKIN_PORT,*(int *)arg);
+    struct cin_arg_t *cin_arg = (struct cin_arg_t *)arg;
+    fd2iccom_loop(ICCOM_SKIN_PORT,cin_arg->fd,cin_arg->message);
     return NULL;
 }
 
 /**
  * @brief Server stdout forward handler
  */
+struct sout_arg_t {int fd;};
 void *sout_handler(void *arg) {
-    fd2iccom_loop(ICCOM_SKOUT_PORT,*(int *)arg);
+    struct sout_arg_t *sout_arg = (struct sout_arg_t *)arg;
+    fd2iccom_loop(ICCOM_SKOUT_PORT,sout_arg->fd,nullptr);
     return NULL;
 }
 
 /**
  * @brief Client stdout forward handler
  */
+struct cout_arg_t {int fd;};
 void *cout_handler(void *arg) {
-    iccom2fd_loop(ICCOM_SKOUT_PORT,*(int *)arg);
+    struct cout_arg_t *cout_arg = (struct cout_arg_t *)arg;
+    iccom2fd_loop(ICCOM_SKOUT_PORT,cout_arg->fd,nullptr);
     return NULL;
 }
 
@@ -802,9 +815,10 @@ int iccshd_main(int argc, char **argv) {
         signal(SIGTSTP, iccshd_clean_up_and_exit);
 
         pthread_t skin, skout, sksig, skcmd;
-
-        pthread_create(&skin, NULL, sin_handler, &m_stdin);
-        pthread_create(&skout, NULL, sout_handler, &m_stdout);
+        sin_arg_t sin_arg = { .fd = m_stdin, };
+        sout_arg_t sout_arg = { .fd = m_stdout, };
+        pthread_create(&skin, NULL, sin_handler, &sin_arg);
+        pthread_create(&skout, NULL, sout_handler, &sout_arg);
         pthread_create(&sksig, NULL, ssig_handler, &pid);
         pthread_create(&skcmd, NULL, scmd_handler, NULL);
 
@@ -825,9 +839,13 @@ static struct termios iccsh_stdin_termbuf_bak;
 static struct termios iccsh_stdout_termbuf_bak;
 
 static void iccsh_useage(void) {
-    printf("USEAGE:\t iccsh [-c <cmd>] [-d]\n");
+    printf("USEAGE:\t iccsh [-c <cmd>] [-i <cmd>] [-d]\n");
+    printf("\t none option is interactively remote machine\n");
+    printf("\t use \"-c\" option is execute command on remote machine\n");
+    printf("\t use \"-i\" option is execute command on remote machine then interactively\n");
     printf("e.g.:\t iccsh\n");
     printf("\t iccsh -c \"echo hello\"\n");
+    printf("\t iccsh -i \"echo hello\"\n");
 }
 
 static void iccsh_clean_up_and_exit(int sig) {
@@ -851,10 +869,21 @@ static void iccsh_clean_up_and_exit(int sig) {
 
 int iccsh_main(int argc, char **argv) {
     char *exe_cmd_arg = nullptr;
+    char *shell_cmd_arg = nullptr;
     iccsh_debug_log = false;
     for(int i = 1; i < argc; i++) {
         if(strcmp(argv[i], "-c") == 0) {
             exe_cmd_arg = argv[i+1];
+            if(i+1 < argc) {
+                i++;
+            } else {
+                iccsh_useage();
+                exit(-1);
+            }
+        }
+        if(strcmp(argv[i], "-i") == 0) {
+            shell_cmd_arg = (char *)malloc(strlen(argv[i+1]+3));
+            sprintf(shell_cmd_arg,"\n%s\n",argv[i+1]);
             if(i+1 < argc) {
                 i++;
             } else {
@@ -926,14 +955,21 @@ int iccsh_main(int argc, char **argv) {
         signal(SIGINT, iccsh_clean_up_and_exit);
         signal(SIGTSTP, iccsh_clean_up_and_exit);
         signal(SIGQUIT, iccsh_clean_up_and_exit);
-
-        pthread_create(&skin, NULL, cin_handler, &t_stdin);
-        pthread_create(&skout, NULL, cout_handler, &t_stdout);
+        
+        cin_arg_t cin_arg = {
+            .fd = t_stdin,
+            .message = shell_cmd_arg?shell_cmd_arg:"\n",
+        };
+        cout_arg_t cout_arg = { .fd = t_stdout, };
+        pthread_create(&skin, NULL, cin_handler, &cin_arg);
+        pthread_create(&skout, NULL, cout_handler, &cout_arg);
 
         pthread_join(skin, NULL);
         pthread_join(skout, NULL);
     }
     
+    if(shell_cmd_arg)
+        free(shell_cmd_arg);
     close(m_stdin);close(s_stdin);
     close(m_stdout);close(s_stdout);
     
