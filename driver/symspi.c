@@ -116,7 +116,9 @@
 // the transmission more efficient. But this requires the 
 // linux spi driver (struct spi_message) to increase the 
 // callback function of TX FIFO fill done.
-#define SYMSPI_USE_SLAVEMODE_TX_FIFOFILL_DONE  1
+#define SYMSPI_USE_SLAVEMODE_TX_FIFOFILL_DONE          1
+#define SYMSPI_USE_SLAVEMODE_TX_FIFOFILL_TIMEOUTTIMER  1
+#define SYMSPI_USE_SLAVEMODE_TX_FIFOFILL_TIMEOUT_MS    (10*1000)
 
 // Define this to work as SPI master
 #define SYMSPI_SPI_MASTER false
@@ -402,9 +404,9 @@ MODULE_PARM_DESC(slave_driver_reday_delay,"The delay between our flag raise and 
 	SYMSPI_CHECK_PRIVATE(msg, error_action)
 
 #define SYMSPI_CHECK_STATE(expected_state, error_action)		\
-	if (symspi->p->state != expected_state) {			\
+	if (atomic_read(&symspi->p->state) != expected_state) {			\
 		symspi_err("called not in %d state but in %d state."	\
-			   , expected_state, symspi->p->state);		\
+			   , expected_state, atomic_read(&symspi->p->state));		\
 		error_action;						\
 	}
 
@@ -484,6 +486,9 @@ static inline void __symspi_restart_timeout_timer(struct symspi_dev *symspi);
 static inline void __symspi_stop_timeout_timer(struct symspi_dev *symspi);
 static inline void __symspi_stop_timeout_timer_sync(struct symspi_dev *symspi);
 static void __symspi_other_side_wait_timeout(unsigned long data);
+#if SYMSPI_USE_SLAVEMODE_TX_FIFOFILL_TIMEOUTTIMER
+static void __symspi_slave_tx_fill_timeout(unsigned long data);
+#endif
 static inline int __symspi_init_workqueue(
 		const struct symspi_dev *const symspi);
 static inline void __symspi_close_workqueue(
@@ -525,7 +530,7 @@ static int symspi_update_xfer_sequence(struct symspi_dev __kernel *symspi
 		, bool force_size_change);
 inline static bool symspi_is_their_request(
 		struct symspi_dev __kernel *symspi);
-inline static char *symspi_get_state_ptr(void *symspi_dev);
+inline static atomic_t *symspi_get_state_ptr(void *symspi_dev);
 inline static char symspi_get_state(void *symspi_dev);
 inline static bool symspi_switch_strict(void *symspi_dev_ptr
 		, char expected_state
@@ -766,9 +771,9 @@ struct symspi_dev_private {
 	struct work_struct postprocessing_work;
 	struct work_struct recover_work;
 
-	char state;
+	atomic_t state;
 
-	int their_flag_drop_counter;
+	atomic_t their_flag_drop_counter;
 
 	bool spi_master_mode;
 	bool hardware_spi_rdy;
@@ -776,8 +781,11 @@ struct symspi_dev_private {
 	int their_flag_irq_number;
 
 	spinlock_t lock;
-	int delayed_xfer_request;
-	bool close_request;
+	atomic_t delayed_xfer_request;
+	atomic_t close_request;
+#if SYMSPI_USE_SLAVEMODE_TX_FIFOFILL_TIMEOUTTIMER
+	struct timer_list slave_tx_fill_timeout_timer;
+#endif
 	struct completion final_leave_xfer_completion;
 
 	int last_error;
@@ -871,8 +879,7 @@ int symspi_do_data_xchange(void __kernel *device
 						       , force_size_change,original_state);
 	// if we are in xfer right now
 	if (res == -FULL_DUPLEX_ERROR_NOT_READY && xfer == NULL && original_state == SYMSPI_STATE_IDLE) {
-		__atomic_add_fetch(&(symspi->p->delayed_xfer_request), 1
-					       , __ATOMIC_SEQ_CST);
+		atomic_add(1, &(symspi->p->delayed_xfer_request));
 		return -FULL_DUPLEX_ERROR_NOT_READY;
 	}
 	if (res != SYMSPI_SUCCESS) {
@@ -1015,8 +1022,8 @@ int symspi_init(void __kernel *device
 
 	// initializing the fields of symspi private
 	symspi->p->magic = SYMSPI_PRIVATE_MAGIC;
-	symspi->p->delayed_xfer_request = 0;
-	symspi->p->close_request = true;
+	atomic_set(&symspi->p->delayed_xfer_request,0);
+	atomic_set(&symspi->p->close_request,true);
 	symspi->p->symspi = symspi;
 	symspi->p->last_error = SYMSPI_SUCCESS;
 
@@ -1026,7 +1033,12 @@ int symspi_init(void __kernel *device
 
 	// timeout timer
 	setup_timer(&symspi->p->wait_timeout_timer,
-		    __symspi_other_side_wait_timeout, (unsigned long)symspi->p);
+		    __symspi_other_side_wait_timeout, (unsigned long)symspi);
+
+#if SYMSPI_USE_SLAVEMODE_TX_FIFOFILL_TIMEOUTTIMER
+	setup_timer(&symspi->p->slave_tx_fill_timeout_timer,
+		    __symspi_slave_tx_fill_timeout, (unsigned long)symspi);
+#endif
 
 	res = symspi_xfer_init_copy(&symspi->p->current_xfer, default_xfer);
 	if (res < 0) {
@@ -1081,13 +1093,13 @@ int symspi_init(void __kernel *device
 	__SYMSPI_INIT_LEVEL(WORKQUEUE_INIT);
 
 	// still cold for now
-	symspi->p->state = SYMSPI_STATE_COLD;
+	atomic_set(&symspi->p->state, SYMSPI_STATE_COLD);
 
 	// NOTE: to be selfconsistend with regular flow, we need to set up
 	//      counter to 1 here, to assume, that other side finished with
 	//      previous xfer, as long either there was no xfer before at all
 	//      either it was reset after error, so previous xfer is still done.
-	symspi->p->their_flag_drop_counter = 1;
+	atomic_set(&symspi->p->their_flag_drop_counter, 1);
 
 	// our steady configuration
 	symspi->p->spi_master_mode = SYMSPI_SPI_MASTER;
@@ -1116,8 +1128,8 @@ int symspi_init(void __kernel *device
 	// we go to normal workflow.
 	// TODO: verify close_request sequence
 	__SYMSPI_INIT_LEVEL(FULL);
-	symspi->p->close_request = false;
-	symspi->p->state = SYMSPI_STATE_IDLE;
+	atomic_set(&symspi->p->close_request,false);
+	atomic_set(&symspi->p->state, SYMSPI_STATE_IDLE);
 
 	symspi_info(SYMSPI_LOG_INFO_KEY_LEVEL, "initialization done");
 #ifdef SYMSPI_DEBUG
@@ -1159,14 +1171,13 @@ int symspi_close(void __kernel *device)
 	// NOTE: this will prevent all strict state switches (EXCEPT
 	//      leaving the XFER state), as well as API entries from
 	//      consumer code (EXCEPT for init and reset calls)
-	bool res = __atomic_compare_exchange_n(&symspi->p->close_request
-			, &expected_state, dst_state, false
-			, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+	bool res = (atomic_cmpxchg(&symspi->p->close_request
+			, expected_state, dst_state) == expected_state);
 	if (!res) {
 		symspi_err("device is closing already");
 		return -EALREADY;
 	}
-	if (symspi->p->state == SYMSPI_STATE_COLD) {
+	if (atomic_read(&symspi->p->state) == SYMSPI_STATE_COLD) {
 		symspi_err("device is already closed");
 		return SYMSPI_SUCCESS;
 	}
@@ -1206,7 +1217,7 @@ full:
 	// * non closeable (need to wait for hardware)
 	//   * SYMSPI_STATE_XFER
 
-	if (symspi->p->state == SYMSPI_STATE_XFER) {
+	if (atomic_read(&symspi->p->state) == SYMSPI_STATE_XFER) {
 		const unsigned long wait_jiffies = msecs_to_jiffies(
 				  SYMSPI_CLOSE_HW_WAIT_TIMEOUT_MSEC);
 		unsigned long res = wait_for_completion_timeout(
@@ -1298,7 +1309,7 @@ bool symspi_is_running(void __kernel *device)
 		return false;
 	}
 	// TODO: to update as mutex on init is done is used
-	return symspi->p->state != SYMSPI_STATE_COLD;
+	return atomic_read(&symspi->p->state) != SYMSPI_STATE_COLD;
 }
 
 // API:
@@ -1731,13 +1742,26 @@ static inline void __symspi_stop_timeout_timer_sync(struct symspi_dev *symspi)
 // Launches error recovery on timeout
 static void __symspi_other_side_wait_timeout(unsigned long data)
 {
-	struct symspi_dev_private *priv = (struct symspi_dev_private *)data;
-	struct symspi_dev *symspi = container_of(&priv, struct symspi_dev, p);
+	struct symspi_dev *symspi = (struct symspi_dev *)data;
 
 	SYMSPI_CHECK_DEVICE_AND_PRIVATE("No device provided for recovery."
 					, return);
 	__symspi_error_handle(SYMSPI_ERROR_WAIT_OTHER_SIDE, 0);
 }
+
+#if SYMSPI_USE_SLAVEMODE_TX_FIFOFILL_TIMEOUTTIMER
+static void __symspi_slave_tx_fill_timeout(unsigned long data)
+{
+	struct symspi_dev *symspi = (struct symspi_dev *)data;
+
+	SYMSPI_CHECK_DEVICE_AND_PRIVATE("No device provided for recovery."
+					, return);
+	symspi_our_flag_drop(symspi);
+	udelay(10);
+	symspi_our_flag_set(symspi);
+	mod_timer(&symspi->p->slave_tx_fill_timeout_timer, jiffies + msecs_to_jiffies(SYMSPI_USE_SLAVEMODE_TX_FIFOFILL_TIMEOUT_MS));
+}
+#endif
 
 // Helper.
 // Inits the workqueue which is to be used by SymSPI
@@ -1827,7 +1851,7 @@ static inline void __symspi_cancel_work_sync(
 //      false: else
 static inline bool __symspi_is_closing(struct symspi_dev *symspi)
 {
-	return symspi->p->close_request;
+	return atomic_read(&symspi->p->close_request);
 }
 
 // Starts from IDLE state. Updates our default TX data.
@@ -2135,7 +2159,7 @@ static int symspi_xfer_prepare_to_waiting_prev_sequence(
 
 	// note, spi slave will bypass waiting prev state
 	// immediately to xfer state
-	if (symspi->p->their_flag_drop_counter == 1
+	if (atomic_read(&symspi->p->their_flag_drop_counter) == 1
 			|| !symspi->p->spi_master_mode) {
 		return symspi_try_leave_waiting_prev_sequence(symspi);
 	}
@@ -2323,7 +2347,7 @@ inline static int symspi_replace_xfer(
 		// previous xfer was closed, data race conditions and
 		// sync between sides loss may appear (if other side is
 		// not aware about this change).
-		if (symspi->p->state != SYMSPI_STATE_XFER
+		if (atomic_read(&symspi->p->state) != SYMSPI_STATE_XFER
 				&& !force_size_change) {
 			symspi_err("%s: sudden change in xfer size"
 				   " while not in XFER state. Will"
@@ -2404,14 +2428,14 @@ inline static bool symspi_is_their_request(
 		struct symspi_dev __kernel *symspi)
 {
 	// see their_flag_drop_counter description
-	return symspi->p->their_flag_drop_counter == 1
+	return atomic_read(&symspi->p->their_flag_drop_counter) == 1
 		    && symspi_their_flag_is_set(symspi);
 }
 
 // Small helper to get our state pointer from our general data
 //
 // NOTE: only for internal use
-inline static char *symspi_get_state_ptr(void *symspi_dev)
+inline static atomic_t *symspi_get_state_ptr(void *symspi_dev)
 {
 	return &(((struct symspi_dev *)symspi_dev)->p->state);
 }
@@ -2421,7 +2445,7 @@ inline static char *symspi_get_state_ptr(void *symspi_dev)
 // NOTE: only for internal use
 inline static char symspi_get_state(void *symspi_dev)
 {
-	return ((struct symspi_dev *)symspi_dev)->p->state;
+	return atomic_read(&((struct symspi_dev *)symspi_dev)->p->state);
 }
 
 // Atomically swiches the state from expected_state to
@@ -2437,7 +2461,7 @@ inline static char symspi_get_state(void *symspi_dev)
 inline static bool symspi_switch_strict(void *symspi_dev_ptr,
 	char expected_state, char dst_state)
 {
-	char *state_ptr = symspi_get_state_ptr(symspi_dev_ptr);
+	atomic_t *state_ptr = symspi_get_state_ptr(symspi_dev_ptr);
 
 	// as closing request comes we can't do anything except
 	// leaving the XFER state
@@ -2449,9 +2473,7 @@ inline static bool symspi_switch_strict(void *symspi_dev_ptr,
 			return false;
 		}
 
-		__atomic_compare_exchange_n(state_ptr, &expected_state
-				, dst_state, false, __ATOMIC_SEQ_CST
-				, __ATOMIC_SEQ_CST);
+		atomic_cmpxchg(state_ptr, expected_state, dst_state);
 
 		// at this point we are in correct state for closing
 		// anyway ,
@@ -2460,9 +2482,7 @@ inline static bool symspi_switch_strict(void *symspi_dev_ptr,
 		return false;
 	}
 
-	bool res = __atomic_compare_exchange_n(state_ptr, &expected_state
-			, dst_state, false, __ATOMIC_SEQ_CST
-			, __ATOMIC_SEQ_CST);
+	bool res = (atomic_cmpxchg(state_ptr, expected_state, dst_state) == expected_state);
 	if (res) {
 		symspi_trace_raw(
 				"Switched from %d to %d", (int)expected_state
@@ -2473,7 +2493,7 @@ inline static bool symspi_switch_strict(void *symspi_dev_ptr,
 				, (int)expected_state
 				, (int)dst_state);
 		symspi_trace_raw(
-				"Current state: %d", (int)(*state_ptr));
+				"Current state: %d", (int)(atomic_read(state_ptr)));
 	}
 	return res;
 }
@@ -2489,8 +2509,8 @@ inline static char symspi_switch_state_val_forced(void *symspi_dev_ptr
 {
 	symspi_info(SYMSPI_LOG_INFO_DBG_LEVEL
 		    , "Forced switching to %d.", (int)dst_state);
-	char *state_ptr = symspi_get_state_ptr(symspi_dev_ptr);
-	return __atomic_exchange_n(state_ptr, dst_state, __ATOMIC_SEQ_CST);
+	atomic_t *state_ptr = symspi_get_state_ptr(symspi_dev_ptr);
+	return atomic_xchg(state_ptr, dst_state);
 }
 
 // TODO: not used for now, need performance tests to decide
@@ -2562,8 +2582,7 @@ static int symspi_do_xfer(struct symspi_dev *symspi)
 	}
 	
 	// dropping their flag falling edge counter right before xfer
-	__atomic_store_n(&symspi->p->their_flag_drop_counter
-			 , 0, __ATOMIC_SEQ_CST);
+	atomic_set(&symspi->p->their_flag_drop_counter, 0);
 
 	// note, SPI_READY flow is enabled/disabled at SPI init time
 	int res = spi_async(symspi->spi, &symspi->p->spi_msg);
@@ -2696,8 +2715,7 @@ static int symspi_recovery_sequence(struct symspi_dev *symspi)
 	}
 
 	// dropping their error indication
-	__atomic_store_n(&symspi->p->their_flag_drop_counter
-			 , 1, __ATOMIC_SEQ_CST);
+	atomic_set(&symspi->p->their_flag_drop_counter, 1);
 
 	symspi->p->last_error = SYMSPI_SUCCESS;
 	if (report) {
@@ -2972,11 +2990,11 @@ static void symspi_postprocessing_sequence(struct work_struct *work)
 				symspi_our_flag_drop(symspi);
 				do {
 					symspi_wait_flag_silence_period();
-				}while(symspi->p->their_flag_drop_counter == 0);
+				}while(atomic_read(&symspi->p->their_flag_drop_counter) == 0);
 			} else {
 				do {
 					symspi_wait_flag_silence_period();
-				}while(symspi->p->their_flag_drop_counter == 0);
+				}while(atomic_read(&symspi->p->their_flag_drop_counter) == 0);
 				symspi_our_flag_drop(symspi);
 			}
 			return;
@@ -2987,14 +3005,14 @@ static void symspi_postprocessing_sequence(struct work_struct *work)
 		symspi_our_flag_drop(symspi);
 		do {
 			symspi_wait_flag_silence_period();
-		}while(symspi->p->their_flag_drop_counter == 0);
+		}while(atomic_read(&symspi->p->their_flag_drop_counter) == 0);
 		symspi_wait_flag_silence_period();
 	} else {
 		do {
 			symspi_wait_flag_silence_period();
-		}while(symspi->p->their_flag_drop_counter == 0);
+		}while(atomic_read(&symspi->p->their_flag_drop_counter) == 0);
 		symspi_our_flag_drop(symspi);
-		if(start_immediately || symspi->p->delayed_xfer_request)
+		if(start_immediately || atomic_read(&symspi->p->delayed_xfer_request))
 			symspi_wait_flag_silence_period();
 	}
 
@@ -3039,7 +3057,7 @@ error_handling:
 static int symspi_try_to_error_sequence(struct symspi_dev *symspi
 					, int internal_error)
 {
-	bool other_side_error = (symspi->p->their_flag_drop_counter > 1);
+	bool other_side_error = (atomic_read(&symspi->p->their_flag_drop_counter) > 1);
 
 	if (internal_error != SYMSPI_SUCCESS || other_side_error) {
 		int err_no = (internal_error == SYMSPI_SUCCESS)
@@ -3094,12 +3112,12 @@ static int symspi_to_idle_sequence(struct symspi_dev *symspi
 	// returning to the IDLE state.
 	__symspi_stop_timeout_timer_sync(symspi);
 
-	start_next_xfer = start_next_xfer || symspi->p->delayed_xfer_request;
-	if(symspi->p->delayed_xfer_request > 0) {
-		__atomic_sub_fetch(&(symspi->p->delayed_xfer_request), 1
-					       , __ATOMIC_SEQ_CST);
+	start_next_xfer = start_next_xfer || atomic_read(&symspi->p->delayed_xfer_request);
+	if(atomic_read(&symspi->p->delayed_xfer_request) > 0) {
+		atomic_sub(1, &(symspi->p->delayed_xfer_request));
 	}
 
+	int ret = SYMSPI_ERROR_STATE;
 	if (start_next_xfer) {
 		// There will be no uncontrollable double xfer from our side
 		// as long as first passed call will switch the state and the next
@@ -3111,30 +3129,29 @@ static int symspi_to_idle_sequence(struct symspi_dev *symspi
 		//
 		// Then the additional customer call will look like other side
 		// ordinary request.
-		symspi_do_data_xchange(symspi, NULL, false, original_state);
+		ret = symspi_do_data_xchange(symspi, NULL, false, original_state);
 	} else {
 		unsigned long irq_flags;
 		spin_lock_irqsave(&symspi->p->lock, irq_flags);
 		if (symspi_is_their_request(symspi)) {
 			spin_unlock_irqrestore(&symspi->p->lock, irq_flags);
-			symspi_do_data_xchange(symspi, NULL, false, original_state);
+			ret = symspi_do_data_xchange(symspi, NULL, false, original_state);
 		} else {
 			symspi_switch_strict((void*)symspi, original_state
 						, SYMSPI_STATE_IDLE);
 			spin_unlock_irqrestore(&symspi->p->lock, irq_flags);
-
-			if (original_state != SYMSPI_STATE_ERROR) {
-				int res = symspi_try_to_error_sequence(symspi, internal_error);
-				if (res != SYMSPI_SUCCESS) {
-					return res;
-				}
-			} else {
-				symspi_info_raw(SYMSPI_LOG_INFO_OPT_LEVEL
-						, "Recovered. Resuming.");
-			}
 		}
 	}
 
+	if(ret != SYMSPI_SUCCESS) {
+		if (original_state != SYMSPI_STATE_ERROR) {
+			int res = symspi_try_to_error_sequence(symspi, internal_error);
+			if (res != SYMSPI_SUCCESS) {
+				return res;
+			}
+		}
+	}
+	
 	return SYMSPI_SUCCESS;
 }
 
@@ -3286,7 +3303,7 @@ static ssize_t __symspi_info_read(struct file *file
 			, s->other_side_no_reaction_errors
 			, s->xfers_done_ok
 			, s->their_flag_edges
-			, symspi->p->delayed_xfer_request
+			, atomic_read(&symspi->p->delayed_xfer_request)
 			, our_flag_inactive_timeout
 			, their_flag_wait_timeout
 		);
@@ -3324,6 +3341,9 @@ static void symspi_spi_xfer_tx_done_callback(void *context)
 	SYMSPI_CHECK_DEVICE_AND_PRIVATE("No device provided.", return);
 #endif
 	if (!symspi->p->spi_master_mode) {
+		#if SYMSPI_USE_SLAVEMODE_TX_FIFOFILL_TIMEOUTTIMER
+		mod_timer(&symspi->p->slave_tx_fill_timeout_timer, jiffies + msecs_to_jiffies(SYMSPI_USE_SLAVEMODE_TX_FIFOFILL_TIMEOUT_MS));
+		#endif
 		symspi_our_flag_set(symspi);
 	}
 }
@@ -3342,6 +3362,12 @@ static void symspi_spi_xfer_done_callback(void *context)
 
 #ifdef SYMSPI_DEBUG
 	SYMSPI_CHECK_DEVICE_AND_PRIVATE("No device provided.", return);
+#endif
+
+#if SYMSPI_USE_SLAVEMODE_TX_FIFOFILL_DONE && SYMSPI_USE_SLAVEMODE_TX_FIFOFILL_TIMEOUTTIMER
+	if (!symspi->p->spi_master_mode) {
+		del_timer(&symspi->p->slave_tx_fill_timeout_timer);
+	}
 #endif
 
 	// No one except us can exit the xfer state, even error
@@ -3422,7 +3448,7 @@ static irqreturn_t symspi_their_flag_isr(int irq, void *symspi_device)
 #endif
 	symspi_trace("Their flag ISR.");
 
-	if (symspi->p->state == SYMSPI_STATE_COLD) {
+	if (atomic_read(&symspi->p->state) == SYMSPI_STATE_COLD) {
 		return IRQ_HANDLED;
 	}
 
@@ -3452,7 +3478,7 @@ static void symspi_their_flag_drop_isr_sequence(
 #ifdef SYMSPI_DEBUG
 	SYMSPI_CHECK_DEVICE_AND_PRIVATE("No device provided.", return);
 #endif
-	int *counter_ptr = &(symspi->p->their_flag_drop_counter);
+	atomic_t *counter_ptr = &(symspi->p->their_flag_drop_counter);
 
 	// NOTE: we could use the kernel provided function, but
 	//          with current kernel version, all atomic operations
@@ -3464,8 +3490,8 @@ static void symspi_their_flag_drop_isr_sequence(
 	//
 	// For now will use GCC atomic builtin.
 
-	const int counter = __atomic_add_fetch(counter_ptr, 1
-					       , __ATOMIC_SEQ_CST);
+	atomic_add(1, counter_ptr);
+	const int counter = atomic_read(counter_ptr);
 
 	// ISR does nothing but counter management on SPI slave side
 	if (counter == 1 && symspi->p->spi_master_mode) {
@@ -3618,7 +3644,7 @@ static void symspi_destroy_device(struct symspi_dev *symspi)
 		return;
 	}
 	if (!IS_ERR_OR_NULL(symspi->p)
-			&& symspi->p->state != SYMSPI_STATE_COLD) {
+			&& atomic_read(&symspi->p->state) != SYMSPI_STATE_COLD) {
 		symspi_close((void*)symspi);
 	}
 
